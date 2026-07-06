@@ -1,0 +1,602 @@
+{
+  "version": "1.0.0",
+  "files": {
+    "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\app-routing.module.ts": {
+      "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\app-routing.module.ts",
+      "lastModified": 1783145657827.7722,
+      "symbols": [
+        {
+          "id": "route:/dashboard",
+          "name": "/dashboard",
+          "type": "route",
+          "location": {
+            "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\app-routing.module.ts",
+            "startLine": 6,
+            "startCol": 3,
+            "endLine": 6,
+            "endCol": 55
+          }
+        },
+        {
+          "id": "module:AppRoutingModule",
+          "name": "AppRoutingModule",
+          "type": "module",
+          "location": {
+            "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\app-routing.module.ts",
+            "startLine": 9,
+            "startCol": 1,
+            "endLine": 13,
+            "endCol": 33
+          }
+        }
+      ],
+      "references": [
+        {
+          "targetSymbolId": "component:DashboardComponent",
+          "location": {
+            "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\app-routing.module.ts",
+            "startLine": 6,
+            "startCol": 3,
+            "endLine": 6,
+            "endCol": 55
+          }
+        },
+        {
+          "targetSymbolId": "module-member:RouterModule.forRoot(routes)",
+          "location": {
+            "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\app-routing.module.ts",
+            "startLine": 10,
+            "startCol": 13,
+            "endLine": 10,
+            "endCol": 41
+          }
+        },
+        {
+          "targetSymbolId": "module-member:RouterModule",
+          "location": {
+            "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\app-routing.module.ts",
+            "startLine": 11,
+            "startCol": 13,
+            "endLine": 11,
+            "endCol": 25
+          }
+        }
+      ]
+    },
+    "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\app.module.ts": {
+      "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\app.module.ts",
+      "lastModified": 1783145661583.3691,
+      "symbols": [
+        {
+          "id": "component:AppModule",
+          "name": "AppModule",
+          "type": "component",
+          "location": {
+            "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\app.module.ts",
+            "startLine": 8,
+            "startCol": 1,
+            "endLine": 19,
+            "endCol": 26
+          },
+          "metadata": {
+            "selector": ""
+          }
+        }
+      ],
+      "references": []
+    },
+    "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\features\\dashboard\\dashboard.component.html": {
+      "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\features\\dashboard\\dashboard.component.html",
+      "lastModified": 1783145648235.9453,
+      "symbols": [],
+      "references": [
+        {
+          "targetSymbolId": "selector:div",
+          "location": {
+            "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\features\\dashboard\\dashboard.component.html",
+            "startLine": 1,
+            "startCol": 1,
+            "endLine": 1,
+            "endCol": 24
+          }
+        },
+        {
+          "targetSymbolId": "css:.container",
+          "location": {
+            "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\features\\dashboard\\dashboard.component.html",
+            "startLine": 1,
+            "startCol": 6,
+            "endLine": 1,
+            "endCol": 23
+          }
+        },
+        {
+          "targetSymbolId": "selector:div",
+          "location": {
+            "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\features\\dashboard\\dashboard.component.html",
+            "startLine": 2,
+            "startCol": 3,
+            "endLine": 2,
+            "endCol": 20
+          }
+        },
+        {
+          "targetSymbolId": "css:.row",
+          "location": {
+            "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\features\\dashboard\\dashboard.component.html",
+            "startLine": 2,
+            "startCol": 8,
+            "endLine": 2,
+            "endCol": 19
+          }
+        },
+        {
+          "targetSymbolId": "selector:div",
+          "location": {
+            "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\features\\dashboard\\dashboard.component.html",
+            "startLine": 3,
+            "startCol": 5,
+            "endLine": 3,
+            "endCol": 22
+          }
+        },
+        {
+          "targetSymbolId": "css:.col",
+          "location": {
+            "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\features\\dashboard\\dashboard.component.html",
+            "startLine": 3,
+            "startCol": 10,
+            "endLine": 3,
+            "endCol": 21
+          }
+        },
+        {
+          "targetSymbolId": "selector:div",
+          "location": {
+            "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\features\\dashboard\\dashboard.component.html",
+            "startLine": 4,
+            "startCol": 7,
+            "endLine": 4,
+            "endCol": 25
+          }
+        },
+        {
+          "targetSymbolId": "css:.card",
+          "location": {
+            "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\features\\dashboard\\dashboard.component.html",
+            "startLine": 4,
+            "startCol": 12,
+            "endLine": 4,
+            "endCol": 24
+          }
+        },
+        {
+          "targetSymbolId": "selector:h1",
+          "location": {
+            "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\features\\dashboard\\dashboard.component.html",
+            "startLine": 5,
+            "startCol": 9,
+            "endLine": 5,
+            "endCol": 13
+          }
+        },
+        {
+          "targetSymbolId": "selector:p",
+          "location": {
+            "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\features\\dashboard\\dashboard.component.html",
+            "startLine": 6,
+            "startCol": 9,
+            "endLine": 6,
+            "endCol": 12
+          }
+        },
+        {
+          "targetSymbolId": "selector:app-shared-button",
+          "location": {
+            "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\features\\dashboard\\dashboard.component.html",
+            "startLine": 7,
+            "startCol": 9,
+            "endLine": 10,
+            "endCol": 32
+          }
+        },
+        {
+          "targetSymbolId": "input:app-shared-button.disabled",
+          "location": {
+            "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\features\\dashboard\\dashboard.component.html",
+            "startLine": 8,
+            "startCol": 11,
+            "endLine": 8,
+            "endCol": 29
+          }
+        },
+        {
+          "targetSymbolId": "output:app-shared-button.trigger",
+          "location": {
+            "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\features\\dashboard\\dashboard.component.html",
+            "startLine": 9,
+            "startCol": 11,
+            "endLine": 9,
+            "endCol": 31
+          }
+        }
+      ]
+    },
+    "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\features\\dashboard\\dashboard.component.scss": {
+      "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\features\\dashboard\\dashboard.component.scss",
+      "lastModified": 1783145653060.235,
+      "symbols": [
+        {
+          "id": "css:.card",
+          "name": ".card",
+          "type": "css-selector",
+          "location": {
+            "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\features\\dashboard\\dashboard.component.scss",
+            "startLine": 1,
+            "startCol": 2,
+            "endLine": 1,
+            "endCol": 7
+          }
+        },
+        {
+          "id": "css:.card",
+          "name": ".card",
+          "type": "css-selector",
+          "location": {
+            "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\features\\dashboard\\dashboard.component.scss",
+            "startLine": 1,
+            "startCol": 2,
+            "endLine": 1,
+            "endCol": 7
+          }
+        }
+      ],
+      "references": []
+    },
+    "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\features\\dashboard\\dashboard.component.ts": {
+      "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\features\\dashboard\\dashboard.component.ts",
+      "lastModified": 1783145643763.512,
+      "symbols": [
+        {
+          "id": "component:DashboardComponent",
+          "name": "DashboardComponent",
+          "type": "component",
+          "location": {
+            "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\features\\dashboard\\dashboard.component.ts",
+            "startLine": 4,
+            "startCol": 1,
+            "endLine": 21,
+            "endCol": 2
+          },
+          "metadata": {
+            "selector": "app-dashboard"
+          }
+        },
+        {
+          "id": "selector:app-dashboard",
+          "name": "app-dashboard",
+          "type": "css-selector",
+          "location": {
+            "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\features\\dashboard\\dashboard.component.ts",
+            "startLine": 4,
+            "startCol": 1,
+            "endLine": 21,
+            "endCol": 2
+          },
+          "metadata": {
+            "parentComponent": "DashboardComponent"
+          }
+        }
+      ],
+      "references": [
+        {
+          "targetSymbolId": "service:ConfigService",
+          "location": {
+            "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\features\\dashboard\\dashboard.component.ts",
+            "startLine": 12,
+            "startCol": 15,
+            "endLine": 12,
+            "endCol": 51
+          }
+        }
+      ]
+    },
+    "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\shared\\components\\button\\button.component.html": {
+      "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\shared\\components\\button\\button.component.html",
+      "lastModified": 1783145622456.0686,
+      "symbols": [],
+      "references": [
+        {
+          "targetSymbolId": "selector:button",
+          "location": {
+            "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\shared\\components\\button\\button.component.html",
+            "startLine": 1,
+            "startCol": 1,
+            "endLine": 1,
+            "endCol": 80
+          }
+        },
+        {
+          "targetSymbolId": "css:.btn",
+          "location": {
+            "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\shared\\components\\button\\button.component.html",
+            "startLine": 1,
+            "startCol": 9,
+            "endLine": 1,
+            "endCol": 32
+          }
+        },
+        {
+          "targetSymbolId": "css:.btn-primary",
+          "location": {
+            "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\shared\\components\\button\\button.component.html",
+            "startLine": 1,
+            "startCol": 9,
+            "endLine": 1,
+            "endCol": 32
+          }
+        },
+        {
+          "targetSymbolId": "input:button.disabled",
+          "location": {
+            "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\shared\\components\\button\\button.component.html",
+            "startLine": 1,
+            "startCol": 33,
+            "endLine": 1,
+            "endCol": 54
+          }
+        },
+        {
+          "targetSymbolId": "output:button.click",
+          "location": {
+            "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\shared\\components\\button\\button.component.html",
+            "startLine": 1,
+            "startCol": 55,
+            "endLine": 1,
+            "endCol": 79
+          }
+        }
+      ]
+    },
+    "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\shared\\components\\button\\button.component.scss": {
+      "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\shared\\components\\button\\button.component.scss",
+      "lastModified": 1783145630032.7495,
+      "symbols": [
+        {
+          "id": "css:.btn-primary",
+          "name": ".btn-primary",
+          "type": "css-selector",
+          "location": {
+            "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\shared\\components\\button\\button.component.scss",
+            "startLine": 1,
+            "startCol": 2,
+            "endLine": 1,
+            "endCol": 14
+          }
+        },
+        {
+          "id": "css:.btn-primary",
+          "name": ".btn-primary",
+          "type": "css-selector",
+          "location": {
+            "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\shared\\components\\button\\button.component.scss",
+            "startLine": 1,
+            "startCol": 2,
+            "endLine": 1,
+            "endCol": 14
+          }
+        },
+        {
+          "id": "css:.btn-primary.disabled",
+          "name": ".btn-primary.disabled",
+          "type": "css-selector",
+          "location": {
+            "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\shared\\components\\button\\button.component.scss",
+            "startLine": 4,
+            "startCol": 4,
+            "endLine": 4,
+            "endCol": 14
+          }
+        },
+        {
+          "id": "css:.btn-primary",
+          "name": ".btn-primary",
+          "type": "css-selector",
+          "location": {
+            "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\shared\\components\\button\\button.component.scss",
+            "startLine": 4,
+            "startCol": 3,
+            "endLine": 4,
+            "endCol": 15
+          }
+        },
+        {
+          "id": "css:.disabled",
+          "name": ".disabled",
+          "type": "css-selector",
+          "location": {
+            "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\shared\\components\\button\\button.component.scss",
+            "startLine": 4,
+            "startCol": 5,
+            "endLine": 4,
+            "endCol": 14
+          }
+        }
+      ],
+      "references": [
+        {
+          "targetSymbolId": "var:$primary-color",
+          "location": {
+            "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\shared\\components\\button\\button.component.scss",
+            "startLine": 2,
+            "startCol": 21,
+            "endLine": 2,
+            "endCol": 35
+          }
+        }
+      ]
+    },
+    "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\shared\\components\\button\\button.component.ts": {
+      "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\shared\\components\\button\\button.component.ts",
+      "lastModified": 1783145616589.306,
+      "symbols": [
+        {
+          "id": "component:SharedButtonComponent",
+          "name": "SharedButtonComponent",
+          "type": "component",
+          "location": {
+            "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\shared\\components\\button\\button.component.ts",
+            "startLine": 3,
+            "startCol": 1,
+            "endLine": 12,
+            "endCol": 2
+          },
+          "metadata": {
+            "selector": "app-shared-button"
+          }
+        },
+        {
+          "id": "selector:app-shared-button",
+          "name": "app-shared-button",
+          "type": "css-selector",
+          "location": {
+            "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\shared\\components\\button\\button.component.ts",
+            "startLine": 3,
+            "startCol": 1,
+            "endLine": 12,
+            "endCol": 2
+          },
+          "metadata": {
+            "parentComponent": "SharedButtonComponent"
+          }
+        },
+        {
+          "id": "input:SharedButtonComponent.disabled",
+          "name": "disabled",
+          "type": "input",
+          "location": {
+            "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\shared\\components\\button\\button.component.ts",
+            "startLine": 9,
+            "startCol": 3,
+            "endLine": 9,
+            "endCol": 38
+          },
+          "metadata": {
+            "component": "SharedButtonComponent"
+          }
+        },
+        {
+          "id": "input:SharedButtonComponent.label",
+          "name": "label",
+          "type": "input",
+          "location": {
+            "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\shared\\components\\button\\button.component.ts",
+            "startLine": 10,
+            "startCol": 3,
+            "endLine": 10,
+            "endCol": 39
+          },
+          "metadata": {
+            "component": "SharedButtonComponent"
+          }
+        },
+        {
+          "id": "output:SharedButtonComponent.trigger",
+          "name": "trigger",
+          "type": "output",
+          "location": {
+            "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\shared\\components\\button\\button.component.ts",
+            "startLine": 11,
+            "startCol": 3,
+            "endLine": 11,
+            "endCol": 48
+          },
+          "metadata": {
+            "component": "SharedButtonComponent"
+          }
+        }
+      ],
+      "references": []
+    },
+    "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\shared\\services\\config.service.ts": {
+      "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\shared\\services\\config.service.ts",
+      "lastModified": 1783145639747.73,
+      "symbols": [
+        {
+          "id": "service:ConfigService",
+          "name": "ConfigService",
+          "type": "service",
+          "location": {
+            "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\app\\shared\\services\\config.service.ts",
+            "startLine": 3,
+            "startCol": 1,
+            "endLine": 12,
+            "endCol": 2
+          }
+        }
+      ],
+      "references": []
+    },
+    "D:\\Digital.ai-TF\\packages\\sample-app\\src\\styles.scss": {
+      "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\styles.scss",
+      "lastModified": 1783145634914.4932,
+      "symbols": [
+        {
+          "id": "var:$primary-color",
+          "name": "$primary-color",
+          "type": "scss-variable",
+          "location": {
+            "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\styles.scss",
+            "startLine": 1,
+            "startCol": 1,
+            "endLine": 1,
+            "endCol": 24
+          },
+          "metadata": {
+            "value": "#007bff"
+          }
+        },
+        {
+          "id": "var:$secondary-color",
+          "name": "$secondary-color",
+          "type": "scss-variable",
+          "location": {
+            "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\styles.scss",
+            "startLine": 2,
+            "startCol": 1,
+            "endLine": 2,
+            "endCol": 26
+          },
+          "metadata": {
+            "value": "#6c757d"
+          }
+        },
+        {
+          "id": "css:.container",
+          "name": ".container",
+          "type": "css-selector",
+          "location": {
+            "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\styles.scss",
+            "startLine": 4,
+            "startCol": 2,
+            "endLine": 4,
+            "endCol": 12
+          }
+        },
+        {
+          "id": "css:.container",
+          "name": ".container",
+          "type": "css-selector",
+          "location": {
+            "filePath": "D:\\Digital.ai-TF\\packages\\sample-app\\src\\styles.scss",
+            "startLine": 4,
+            "startCol": 2,
+            "endLine": 4,
+            "endCol": 12
+          }
+        }
+      ],
+      "references": []
+    }
+  }
+}

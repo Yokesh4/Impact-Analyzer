@@ -1,0 +1,79 @@
+{
+  "name": "impact-guard-vscode",
+  "displayName": "Impact Guard",
+  "description": "Enterprise Line-Level Impact Analyzer for Angular Applications",
+  "version": "1.0.0",
+  "publisher": "antigravity",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onView:impact-guard-view",
+    "onLanguage:typescript",
+    "onLanguage:html",
+    "onLanguage:scss",
+    "workspaceContains:**/angular.json"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "impact-guard-container",
+          "title": "Impact Guard",
+          "icon": "$(shield)"
+        }
+      ]
+    },
+    "views": {
+      "impact-guard-container": [
+        {
+          "id": "impact-guard-view",
+          "name": "Line-Level Impact Analyzer",
+          "type": "tree"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "impact-guard.analyzeSymbol",
+        "title": "Impact Guard: Analyze Current Symbol"
+      },
+      {
+        "command": "impact-guard.analyzeFile",
+        "title": "Impact Guard: Analyze Current File"
+      },
+      {
+        "command": "impact-guard.analyzeWorkspace",
+        "title": "Impact Guard: Analyze Workspace"
+      },
+      {
+        "command": "impact-guard.rebuildIndex",
+        "title": "Impact Guard: Rebuild Index"
+      },
+      {
+        "command": "impact-guard.showDependencyGraph",
+        "title": "Impact Guard: Show Dependency Graph"
+      },
+      {
+        "command": "impact-guard.exportReport",
+        "title": "Impact Guard: Export Report"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "build": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --platform=node --format=cjs",
+    "watch": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --platform=node --format=cjs --watch",
+    "clean": "tsc -b --clean"
+  },
+  "dependencies": {
+    "@impact-guard/engine": "*"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.80.0"
+  }
+}

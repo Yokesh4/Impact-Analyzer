@@ -1,0 +1,15 @@
+{
+  "name": "@impact-guard/cli",
+  "version": "1.0.0",
+  "main": "dist/index.js",
+  "bin": {
+    "impact-guard": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "tsc -b --clean"
+  },
+  "dependencies": {
+    "@impact-guard/engine": "*"
+  }
+}

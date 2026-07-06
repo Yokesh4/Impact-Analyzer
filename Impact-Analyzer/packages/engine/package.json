@@ -1,0 +1,13 @@
+{
+  "name": "@impact-guard/engine",
+  "version": "1.0.0",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "tsc -b --clean"
+  },
+  "dependencies": {
+    "typescript": "^5.2.2"
+  }
+}
