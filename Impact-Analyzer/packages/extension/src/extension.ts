@@ -73,12 +73,20 @@ export async function activate(context: vscode.ExtensionContext) {
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('impact-guard.analyzeSymbol', async () => {
-      const editor = vscode.window.activeTextEditor;
-      if (!editor) return;
-      const symbol = getSymbolAtCursor(editor);
-      if (symbol) {
-        runImpactAnalysis(symbol.id);
+    vscode.commands.registerCommand('impact-guard.analyzeSymbol', async (symbolId?: string) => {
+      let id = symbolId;
+      if (!id) {
+        const editor = vscode.window.activeTextEditor;
+        if (editor) {
+          const symbol = getSymbolAtCursor(editor);
+          if (symbol) {
+            id = symbol.id;
+          }
+        }
+      }
+      if (id) {
+        runImpactAnalysis(id);
+        vscode.commands.executeCommand('impact-guard-view.focus');
       } else {
         vscode.window.showWarningMessage('No Impact Guard symbols found under cursor.');
       }
@@ -249,9 +257,13 @@ class TreeItemNode extends vscode.TreeItem {
     public readonly label: string,
     public readonly collapsibleState: vscode.TreeItemCollapsibleState,
     public readonly description?: string,
-    public readonly iconPath?: vscode.ThemeIcon
+    public readonly iconPath?: vscode.ThemeIcon,
+    public readonly command?: vscode.Command
   ) {
     super(label, collapsibleState);
+    if (command) {
+      this.command = command;
+    }
   }
 }
 
@@ -290,19 +302,72 @@ class ImpactTreeProvider implements vscode.TreeDataProvider<TreeItemNode> {
     if (label.startsWith('Affected Components')) {
       const items = this.report.affectedNodes
         .filter(n => n.type === 'component')
-        .map(n => new TreeItemNode(`${n.name} (Risk: ${n.risk.toUpperCase()})`, vscode.TreeItemCollapsibleState.None, n.filePath, new vscode.ThemeIcon('chevron-right')));
+        .map(n => {
+          let emoji = '🟢';
+          if (n.risk === 'critical') emoji = '🔴';
+          else if (n.risk === 'high') emoji = '🟠';
+          else if (n.risk === 'medium') emoji = '🟡';
+          
+          return new TreeItemNode(
+            `${emoji} ${n.name}`,
+            vscode.TreeItemCollapsibleState.None,
+            path.basename(n.filePath),
+            new vscode.ThemeIcon('symbol-class'),
+            {
+              title: 'Open File',
+              command: 'vscode.open',
+              arguments: [vscode.Uri.file(n.filePath)]
+            }
+          );
+        });
       return Promise.resolve(items);
     }
     if (label.startsWith('Affected Modules')) {
       const items = this.report.affectedNodes
         .filter(n => n.type === 'module')
-        .map(n => new TreeItemNode(`${n.name} (Risk: ${n.risk.toUpperCase()})`, vscode.TreeItemCollapsibleState.None, n.filePath, new vscode.ThemeIcon('chevron-right')));
+        .map(n => {
+          let emoji = '🟢';
+          if (n.risk === 'critical') emoji = '🔴';
+          else if (n.risk === 'high') emoji = '🟠';
+          else if (n.risk === 'medium') emoji = '🟡';
+
+          return new TreeItemNode(
+            `${emoji} ${n.name}`,
+            vscode.TreeItemCollapsibleState.None,
+            path.basename(n.filePath),
+            new vscode.ThemeIcon('package'),
+            {
+              title: 'Open File',
+              command: 'vscode.open',
+              arguments: [vscode.Uri.file(n.filePath)]
+            }
+          );
+        });
       return Promise.resolve(items);
     }
     if (label.startsWith('Affected Routes')) {
       const items = this.report.affectedNodes
         .filter(n => n.type === 'route')
-        .map(n => new TreeItemNode(`${n.name} (Risk: ${n.risk.toUpperCase()})`, vscode.TreeItemCollapsibleState.None, undefined, new vscode.ThemeIcon('chevron-right')));
+        .map(n => {
+          let emoji = '🟢';
+          if (n.risk === 'critical') emoji = '🔴';
+          else if (n.risk === 'high') emoji = '🟠';
+          else if (n.risk === 'medium') emoji = '🟡';
+
+          const cmd = n.filePath ? {
+            title: 'Open Routing Config',
+            command: 'vscode.open',
+            arguments: [vscode.Uri.file(n.filePath)]
+          } : undefined;
+
+          return new TreeItemNode(
+            `${emoji} ${n.name}`,
+            vscode.TreeItemCollapsibleState.None,
+            'Route Definition',
+            new vscode.ThemeIcon('symbol-interface'),
+            cmd
+          );
+        });
       return Promise.resolve(items);
     }
 
@@ -329,10 +394,15 @@ class ImpactCodeLensProvider implements vscode.CodeLensProvider {
         const downCount = downstream.length;
         const risk = RiskEngine.calculateRisk(downCount, sym.type);
 
+        let emoji = '🟢';
+        if (risk === 'critical') emoji = '🔴';
+        else if (risk === 'high') emoji = '🟠';
+        else if (risk === 'medium') emoji = '🟡';
+
         const lens = new vscode.CodeLens(range, {
-          title: `Impact Guard: ${downCount} downstream usages | Risk: ${risk.toUpperCase()}`,
+          title: `🛡️ Impact: ${downCount} downstream usages | ${emoji} ${risk.toUpperCase()} Risk`,
           command: 'impact-guard.analyzeSymbol',
-          arguments: []
+          arguments: [sym.id]
         });
         lenses.push(lens);
       }
@@ -354,10 +424,17 @@ class ImpactHoverProvider implements vscode.HoverProvider {
     const risk = RiskEngine.calculateRisk(downCount, symbol.type);
 
     const markdown = new vscode.MarkdownString();
+    markdown.isTrusted = true;
+    
+    let emoji = '🟢';
+    if (risk === 'critical') emoji = '🔴';
+    else if (risk === 'high') emoji = '🟠';
+    else if (risk === 'medium') emoji = '🟡';
+
     markdown.appendMarkdown(`### $(shield) Impact Guard Summary\n\n`);
     markdown.appendMarkdown(`- **Symbol Name:** \`${symbol.name}\` (${symbol.type})\n`);
     markdown.appendMarkdown(`- **Usage Count:** ${downCount} downstream files/nodes affected\n`);
-    markdown.appendMarkdown(`- **Risk Level:** **${risk.toUpperCase()}**\n\n`);
+    markdown.appendMarkdown(`- **Risk Level:** **${emoji} ${risk.toUpperCase()}**\n\n`);
     
     if (downCount > 0) {
       markdown.appendMarkdown(`**Affected Items:**\n`);
@@ -367,8 +444,12 @@ class ImpactHoverProvider implements vscode.HoverProvider {
           markdown.appendMarkdown(`- \`${node.name}\` (${node.type})\n`);
         }
       }
+      
+      const argsStr = encodeURIComponent(JSON.stringify([symbol.id]));
       if (downCount > 5) {
-        markdown.appendMarkdown(`- ... and ${downCount - 5} more.\n`);
+        markdown.appendMarkdown(`\n👉 **[Show all ${downCount} affected items in Sidebar...](command:impact-guard.analyzeSymbol?${argsStr})**\n`);
+      } else {
+        markdown.appendMarkdown(`\n👉 **[Reveal impact path in Sidebar...](command:impact-guard.analyzeSymbol?${argsStr})**\n`);
       }
     }
     

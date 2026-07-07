@@ -64,7 +64,13 @@ export function parseHTML(filePath: string, content: string): { symbols: Workspa
         endCol: attrEndLoc.col
       };
 
-      if (attrName.startsWith('[') && attrName.endsWith(']')) {
+      if (attrName.startsWith('[style.') && attrName.endsWith(']')) {
+        const styleProp = attrName.slice(7, -1);
+        references.push({
+          targetSymbolId: `style:${styleProp}`,
+          location: attrLoc
+        });
+      } else if (attrName.startsWith('[') && attrName.endsWith(']')) {
         const inputProp = attrName.slice(1, -1);
         references.push({
           targetSymbolId: `input:${tagName}.${inputProp}`,
