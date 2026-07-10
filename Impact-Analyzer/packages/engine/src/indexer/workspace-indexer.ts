@@ -86,8 +86,13 @@ export class WorkspaceIndexer {
     if (!fs.existsSync(dir)) return results;
     
     const list = fs.readdirSync(dir);
+    const ignoredDirs = [
+      'node_modules', '.git', 'dist', '.angular', 'out',
+      '.vscode', '.idea', 'build', 'coverage', '.cache',
+      'tmp', 'temp', 'vendor', 'docker', '.docker'
+    ];
     for (const file of list) {
-      if (file === 'node_modules' || file === '.git' || file === 'dist' || file === '.angular' || file === 'out') {
+      if (ignoredDirs.includes(file)) {
         continue;
       }
       const absolutePath = path.join(dir, file);
