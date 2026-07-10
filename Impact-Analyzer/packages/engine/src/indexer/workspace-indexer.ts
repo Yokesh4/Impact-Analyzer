@@ -17,28 +17,35 @@ export class WorkspaceIndexer {
     const allFiles = this.findFiles(this.workspaceRoot);
     const totalFiles = allFiles.length;
     let processed = 0;
+    const concurrency = 15;
 
-    for (const filePath of allFiles) {
-      try {
-        await this.indexFile(filePath);
-      } catch (err) {
-        console.error(`Error indexing file: ${filePath}`, err);
-      }
-      processed++;
-      if (progressCallback) {
-        progressCallback(Math.round((processed / totalFiles) * 100), `Indexed ${path.basename(filePath)}`);
-      }
+    // Process files in parallel batches of size `concurrency`
+    for (let i = 0; i < allFiles.length; i += concurrency) {
+      const chunk = allFiles.slice(i, i + concurrency);
+      await Promise.all(chunk.map(async (filePath) => {
+        try {
+          await this.indexFile(filePath);
+        } catch (err) {
+          console.error(`Error indexing file: ${filePath}`, err);
+        }
+        processed++;
+        if (progressCallback) {
+          progressCallback(Math.round((processed / totalFiles) * 100), `Indexed ${path.basename(filePath)}`);
+        }
+      }));
     }
   }
 
   public async indexFile(filePath: string, force: boolean = false): Promise<boolean> {
     const absolutePath = path.resolve(filePath);
-    if (!fs.existsSync(absolutePath)) {
+    let stat: fs.Stats;
+    try {
+      stat = await fs.promises.stat(absolutePath);
+    } catch (err) {
       this.removeFile(absolutePath);
       return true;
     }
     
-    const stat = fs.statSync(absolutePath);
     const lastModified = stat.mtimeMs;
 
     const existing = this.files[absolutePath];
@@ -46,7 +53,7 @@ export class WorkspaceIndexer {
       return false; // File has not changed
     }
 
-    const content = fs.readFileSync(absolutePath, 'utf-8');
+    const content = await fs.promises.readFile(absolutePath, 'utf-8');
     const ext = path.extname(absolutePath).toLowerCase();
 
     let symbols: WorkspaceSymbol[] = [];
