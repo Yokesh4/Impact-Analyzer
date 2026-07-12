@@ -19,6 +19,19 @@
   ],
   "main": "./dist/extension.js",
   "contributes": {
+    "configuration": {
+      "title": "Impact Guard",
+      "properties": {
+        "impactGuard.exclude": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Additional folders to exclude from indexing (relative to workspace root, e.g. ['src/assets', 'dist-dev'])"
+        }
+      }
+    },
     "viewsContainers": {
       "activitybar": [
         {

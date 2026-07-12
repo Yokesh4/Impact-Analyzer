@@ -13,8 +13,8 @@ export class WorkspaceIndexer {
     this.workspaceRoot = path.resolve(workspaceRoot);
   }
 
-  public async indexWorkspace(progressCallback?: (percentage: number, msg: string) => void): Promise<void> {
-    const allFiles = this.findFiles(this.workspaceRoot);
+  public async indexWorkspace(progressCallback?: (percentage: number, msg: string) => void, customFiles?: string[]): Promise<void> {
+    const allFiles = customFiles || this.findFiles(this.workspaceRoot);
     const totalFiles = allFiles.length;
     let processed = 0;
     const concurrency = 15;
@@ -116,10 +116,69 @@ export class WorkspaceIndexer {
     return results;
   }
 
+  private toRelative(absolutePath: string): string {
+    const relative = path.relative(this.workspaceRoot, absolutePath);
+    return relative.replace(/\\/g, '/');
+  }
+
+  private toAbsolute(relativePath: string): string {
+    if (path.isAbsolute(relativePath)) {
+      return path.resolve(relativePath);
+    }
+    return path.resolve(this.workspaceRoot, relativePath);
+  }
+
+  private serializeFileIndex(fileIndex: FileIndex): FileIndex {
+    return {
+      filePath: this.toRelative(fileIndex.filePath),
+      lastModified: fileIndex.lastModified,
+      symbols: fileIndex.symbols.map(sym => ({
+        ...sym,
+        location: {
+          ...sym.location,
+          filePath: sym.location.filePath ? this.toRelative(sym.location.filePath) : ''
+        }
+      })),
+      references: fileIndex.references.map(ref => ({
+        ...ref,
+        location: {
+          ...ref.location,
+          filePath: ref.location.filePath ? this.toRelative(ref.location.filePath) : ''
+        }
+      }))
+    };
+  }
+
+  private deserializeFileIndex(fileIndex: FileIndex): FileIndex {
+    return {
+      filePath: this.toAbsolute(fileIndex.filePath),
+      lastModified: fileIndex.lastModified,
+      symbols: fileIndex.symbols.map(sym => ({
+        ...sym,
+        location: {
+          ...sym.location,
+          filePath: sym.location.filePath ? this.toAbsolute(sym.location.filePath) : ''
+        }
+      })),
+      references: fileIndex.references.map(ref => ({
+        ...ref,
+        location: {
+          ...ref.location,
+          filePath: ref.location.filePath ? this.toAbsolute(ref.location.filePath) : ''
+        }
+      }))
+    };
+  }
+
   public saveCache(cacheFilePath: string): void {
+    const serializedFiles: Record<string, FileIndex> = {};
+    for (const [absPath, fileIndex] of Object.entries(this.files)) {
+      const relKey = this.toRelative(absPath);
+      serializedFiles[relKey] = this.serializeFileIndex(fileIndex);
+    }
     const data: IndexerCache = {
       version: '1.0.0',
-      files: this.files
+      files: serializedFiles
     };
     fs.writeFileSync(cacheFilePath, JSON.stringify(data, null, 2), 'utf-8');
   }
@@ -132,7 +191,12 @@ export class WorkspaceIndexer {
       const content = fs.readFileSync(cacheFilePath, 'utf-8');
       const data: IndexerCache = JSON.parse(content);
       if (data.version === '1.0.0') {
-        this.files = data.files;
+        const deserializedFiles: Record<string, FileIndex> = {};
+        for (const [relPath, fileIndex] of Object.entries(data.files)) {
+          const absKey = this.toAbsolute(relPath);
+          deserializedFiles[absKey] = this.deserializeFileIndex(fileIndex);
+        }
+        this.files = deserializedFiles;
         return true;
       }
     } catch (e) {

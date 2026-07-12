@@ -44,9 +44,10 @@ export async function activate(context: vscode.ExtensionContext) {
   }, async (progress) => {
     let loaded = indexer.loadCache(cacheFilePath);
     if (!loaded) {
+      const filePaths = await findWorkspaceFiles();
       await indexer.indexWorkspace((percentage, msg) => {
         progress.report({ message: `${percentage}% - ${msg}` });
-      });
+      }, filePaths);
       indexer.saveCache(cacheFilePath);
     }
     graph.buildGraph(indexer);
@@ -105,7 +106,8 @@ export async function activate(context: vscode.ExtensionContext) {
 
     vscode.commands.registerCommand('impact-guard.rebuildIndex', async () => {
       statusBarItem.text = '$(sync~spin) Impact Guard: Rebuilding...';
-      await indexer.indexWorkspace();
+      const filePaths = await findWorkspaceFiles();
+      await indexer.indexWorkspace(undefined, filePaths);
       graph.buildGraph(indexer);
       indexer.saveCache(cacheFilePath);
       statusBarItem.text = '$(shield) Impact Guard: Active';
@@ -461,4 +463,25 @@ export function deactivate() {
   if (statusBarItem) {
     statusBarItem.dispose();
   }
+}
+
+async function findWorkspaceFiles(): Promise<string[]> {
+  const config = vscode.workspace.getConfiguration('impactGuard');
+  const extraExcludes = config.get<string[]>('exclude') || [];
+  
+  // Build exclude glob
+  let excludeGlob = '**/node_modules/**';
+  if (extraExcludes.length > 0) {
+    const formattedExcludes = extraExcludes.map(p => {
+      let cleaned = p.trim().replace(/^\/|\\/, '').replace(/\/|\\$/, '');
+      return `**/${cleaned}/**`;
+    });
+    excludeGlob = `{**/node_modules/**,${formattedExcludes.join(',')}}`;
+  }
+
+  const uris = await vscode.workspace.findFiles(
+    '**/*.{ts,html,css,scss,less}',
+    excludeGlob
+  );
+  return uris.map(uri => uri.fsPath);
 }

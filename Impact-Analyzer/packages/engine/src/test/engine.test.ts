@@ -148,4 +148,61 @@ describe('Impact Guard Core Engine Tests', () => {
       expect(risk).toBe('medium');
     });
   });
+
+  describe('Cache Portability (Relative Paths)', () => {
+    it('should save cache with relative paths and load it back with absolute paths', () => {
+      const fs = require('fs');
+      const workspaceRoot = path.resolve(__dirname);
+      const indexer = new WorkspaceIndexer(workspaceRoot);
+
+      const testFileAbs = path.join(workspaceRoot, 'test-file.ts');
+      const testFileRel = 'test-file.ts';
+
+      indexer.files[testFileAbs] = {
+        filePath: testFileAbs,
+        lastModified: 12345,
+        symbols: [
+          {
+            id: 'component:TestComp',
+            name: 'TestComp',
+            type: 'component',
+            location: { filePath: testFileAbs, startLine: 1, startCol: 1, endLine: 5, endCol: 5 }
+          }
+        ],
+        references: [
+          {
+            targetSymbolId: 'service:TestService',
+            location: { filePath: testFileAbs, startLine: 2, startCol: 2, endLine: 2, endCol: 20 }
+          }
+        ]
+      };
+
+      const tempCacheFile = path.join(workspaceRoot, 'temp-test-cache.json');
+      try {
+        indexer.saveCache(tempCacheFile);
+
+        // Verify the saved JSON has relative paths
+        const savedContent = JSON.parse(fs.readFileSync(tempCacheFile, 'utf-8'));
+        expect(savedContent.files[testFileRel]).toBeDefined();
+        expect(savedContent.files[testFileRel].filePath).toBe(testFileRel);
+        expect(savedContent.files[testFileRel].symbols[0].location.filePath).toBe(testFileRel);
+        expect(savedContent.files[testFileRel].references[0].location.filePath).toBe(testFileRel);
+
+        // Now load into a new indexer with the same root
+        const newIndexer = new WorkspaceIndexer(workspaceRoot);
+        const loaded = newIndexer.loadCache(tempCacheFile);
+        expect(loaded).toBe(true);
+
+        // Verify paths are absolute again
+        expect(newIndexer.files[testFileAbs]).toBeDefined();
+        expect(newIndexer.files[testFileAbs].filePath).toBe(testFileAbs);
+        expect(newIndexer.files[testFileAbs].symbols[0].location.filePath).toBe(testFileAbs);
+        expect(newIndexer.files[testFileAbs].references[0].location.filePath).toBe(testFileAbs);
+      } finally {
+        if (fs.existsSync(tempCacheFile)) {
+          fs.unlinkSync(tempCacheFile);
+        }
+      }
+    });
+  });
 });
