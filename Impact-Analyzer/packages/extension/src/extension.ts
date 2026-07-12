@@ -42,33 +42,49 @@ export async function activate(context: vscode.ExtensionContext) {
     title: "Impact Guard Indexing",
     cancellable: false
   }, async (progress) => {
-    let loaded = indexer.loadCache(cacheFilePath);
-    if (!loaded) {
-      const filePaths = await findWorkspaceFiles();
-      await indexer.indexWorkspace((percentage, msg) => {
-        progress.report({ message: `${percentage}% - ${msg}` });
-      }, filePaths);
-      indexer.saveCache(cacheFilePath);
+    try {
+      let loaded = indexer.loadCache(cacheFilePath);
+      if (!loaded) {
+        const filePaths = await findWorkspaceFiles();
+        await indexer.indexWorkspace((percentage, msg) => {
+          progress.report({ message: `${percentage}% - ${msg}` });
+        }, filePaths);
+        indexer.saveCache(cacheFilePath);
+      }
+      graph.buildGraph(indexer);
+      
+      statusBarItem.text = '$(shield) Impact Guard: Active';
+      statusBarItem.tooltip = 'Click to show dependency graph';
+      statusBarItem.command = 'impact-guard.showDependencyGraph';
+    } catch (err) {
+      console.error('Error during Impact Guard activation indexing:', err);
+      statusBarItem.text = '$(warning) Impact Guard: Error';
+      statusBarItem.tooltip = 'Click to rebuild index';
+      statusBarItem.command = 'impact-guard.rebuildIndex';
     }
-    graph.buildGraph(indexer);
-    
-    statusBarItem.text = '$(shield) Impact Guard: Active';
-    statusBarItem.tooltip = 'Click to show dependency graph';
-    statusBarItem.command = 'impact-guard.showDependencyGraph';
   });
 
   context.subscriptions.push(
     vscode.workspace.onDidSaveTextDocument(async (doc) => {
       const ext = path.extname(doc.fileName).toLowerCase();
-      if (['.ts', '.html', '.css', '.scss', '.less'].includes(ext)) {
+      if (['.ts', '.html', '.css', '.scss', '.less', '.jsp'].includes(ext)) {
         statusBarItem.text = '$(sync~spin) Impact Guard: Re-indexing...';
-        const changed = await indexer.indexFile(doc.fileName, true);
-        if (changed) {
-          graph.buildGraph(indexer);
-          indexer.saveCache(cacheFilePath);
+        try {
+          const changed = await indexer.indexFile(doc.fileName, true);
+          if (changed) {
+            graph.buildGraph(indexer);
+            indexer.saveCache(cacheFilePath);
+          }
+          statusBarItem.text = '$(shield) Impact Guard: Active';
+          statusBarItem.tooltip = 'Click to show dependency graph';
+          statusBarItem.command = 'impact-guard.showDependencyGraph';
+          triggerLineAnalysisForActiveEditor();
+        } catch (err) {
+          console.error('Error during Impact Guard file save auto-indexing:', err);
+          statusBarItem.text = '$(warning) Impact Guard: Error';
+          statusBarItem.tooltip = 'Click to rebuild index';
+          statusBarItem.command = 'impact-guard.rebuildIndex';
         }
-        statusBarItem.text = '$(shield) Impact Guard: Active';
-        triggerLineAnalysisForActiveEditor();
       }
     })
   );
@@ -106,12 +122,22 @@ export async function activate(context: vscode.ExtensionContext) {
 
     vscode.commands.registerCommand('impact-guard.rebuildIndex', async () => {
       statusBarItem.text = '$(sync~spin) Impact Guard: Rebuilding...';
-      const filePaths = await findWorkspaceFiles();
-      await indexer.indexWorkspace(undefined, filePaths);
-      graph.buildGraph(indexer);
-      indexer.saveCache(cacheFilePath);
-      statusBarItem.text = '$(shield) Impact Guard: Active';
-      vscode.window.showInformationMessage('Impact Guard Workspace Index rebuilt.');
+      try {
+        const filePaths = await findWorkspaceFiles();
+        await indexer.indexWorkspace(undefined, filePaths);
+        graph.buildGraph(indexer);
+        indexer.saveCache(cacheFilePath);
+        statusBarItem.text = '$(shield) Impact Guard: Active';
+        statusBarItem.tooltip = 'Click to show dependency graph';
+        statusBarItem.command = 'impact-guard.showDependencyGraph';
+        vscode.window.showInformationMessage('Impact Guard Workspace Index rebuilt.');
+      } catch (err) {
+        console.error('Error rebuilding index:', err);
+        statusBarItem.text = '$(warning) Impact Guard: Error';
+        statusBarItem.tooltip = 'Click to rebuild index';
+        statusBarItem.command = 'impact-guard.rebuildIndex';
+        vscode.window.showErrorMessage('Failed to rebuild Impact Guard Workspace Index.');
+      }
     }),
 
     vscode.commands.registerCommand('impact-guard.showDependencyGraph', () => {
@@ -145,7 +171,9 @@ export async function activate(context: vscode.ExtensionContext) {
     { scheme: 'file', language: 'html' },
     { scheme: 'file', language: 'css' },
     { scheme: 'file', language: 'scss' },
-    { scheme: 'file', language: 'less' }
+    { scheme: 'file', language: 'less' },
+    { scheme: 'file', language: 'jsp' },
+    { scheme: 'file', pattern: '**/*.jsp' }
   ];
 
   context.subscriptions.push(
@@ -296,6 +324,8 @@ class ImpactTreeProvider implements vscode.TreeDataProvider<TreeItemNode> {
         new TreeItemNode(`Trigger: ${this.report.triggerSymbol?.name || 'Unknown'}`, vscode.TreeItemCollapsibleState.None, this.report.triggerSymbol?.type, new vscode.ThemeIcon('symbol-property')),
         new TreeItemNode(`Overall Risk: ${this.report.overallRisk.toUpperCase()}`, vscode.TreeItemCollapsibleState.None, undefined, new vscode.ThemeIcon('warning')),
         new TreeItemNode(`Affected Components (${this.report.affectedNodes.filter(n => n.type === 'component').length})`, vscode.TreeItemCollapsibleState.Collapsed, undefined, new vscode.ThemeIcon('symbol-class')),
+        new TreeItemNode(`Affected HTML Pages (${this.report.affectedNodes.filter(n => n.type === 'html-page' as any).length})`, vscode.TreeItemCollapsibleState.Collapsed, undefined, new vscode.ThemeIcon('layout')),
+        new TreeItemNode(`Affected JSP Pages (${this.report.affectedNodes.filter(n => n.type === 'jsp-page' as any).length})`, vscode.TreeItemCollapsibleState.Collapsed, undefined, new vscode.ThemeIcon('file-code')),
         new TreeItemNode(`Affected Modules (${this.report.affectedNodes.filter(n => n.type === 'module').length})`, vscode.TreeItemCollapsibleState.Collapsed, undefined, new vscode.ThemeIcon('package')),
         new TreeItemNode(`Affected Routes (${this.report.affectedNodes.filter(n => n.type === 'route').length})`, vscode.TreeItemCollapsibleState.Collapsed, undefined, new vscode.ThemeIcon('symbol-interface'))
       ];
@@ -317,6 +347,52 @@ class ImpactTreeProvider implements vscode.TreeDataProvider<TreeItemNode> {
             vscode.TreeItemCollapsibleState.None,
             path.basename(n.filePath),
             new vscode.ThemeIcon('symbol-class'),
+            {
+              title: 'Open File',
+              command: 'vscode.open',
+              arguments: [vscode.Uri.file(n.filePath)]
+            }
+          );
+        });
+      return Promise.resolve(items);
+    }
+    if (label.startsWith('Affected HTML Pages')) {
+      const items = this.report.affectedNodes
+        .filter(n => n.type === 'html-page' as any)
+        .map(n => {
+          let emoji = '🟢';
+          if (n.risk === 'critical') emoji = '🔴';
+          else if (n.risk === 'high') emoji = '🟠';
+          else if (n.risk === 'medium') emoji = '🟡';
+          
+          return new TreeItemNode(
+            `${emoji} ${n.name}`,
+            vscode.TreeItemCollapsibleState.None,
+            path.basename(n.filePath),
+            new vscode.ThemeIcon('layout'),
+            {
+              title: 'Open File',
+              command: 'vscode.open',
+              arguments: [vscode.Uri.file(n.filePath)]
+            }
+          );
+        });
+      return Promise.resolve(items);
+    }
+    if (label.startsWith('Affected JSP Pages')) {
+      const items = this.report.affectedNodes
+        .filter(n => n.type === 'jsp-page' as any)
+        .map(n => {
+          let emoji = '🟢';
+          if (n.risk === 'critical') emoji = '🔴';
+          else if (n.risk === 'high') emoji = '🟠';
+          else if (n.risk === 'medium') emoji = '🟡';
+          
+          return new TreeItemNode(
+            `${emoji} ${n.name}`,
+            vscode.TreeItemCollapsibleState.None,
+            path.basename(n.filePath),
+            new vscode.ThemeIcon('file-code'),
             {
               title: 'Open File',
               command: 'vscode.open',
@@ -482,7 +558,7 @@ async function findWorkspaceFiles(): Promise<string[]> {
   }
 
   const uris = await vscode.workspace.findFiles(
-    '**/*.{ts,html,css,scss,less}',
+    '**/*.{ts,html,css,scss,less,jsp}',
     excludeGlob
   );
   return uris.map(uri => uri.fsPath);

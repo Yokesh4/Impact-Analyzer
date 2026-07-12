@@ -9,7 +9,9 @@ export type SymbolType =
   | 'output'
   | 'directive'
   | 'pipe'
-  | 'route';
+  | 'route'
+  | 'html-page'
+  | 'jsp-page';
 
 export interface SourceLocation {
   filePath: string;

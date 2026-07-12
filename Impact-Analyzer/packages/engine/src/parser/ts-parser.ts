@@ -1,5 +1,6 @@
 import * as ts from 'typescript';
 import { WorkspaceSymbol, WorkspaceReference, SourceLocation } from '../types.js';
+import { parseCSS } from './css-parser.js';
 
 export function parseTypeScript(filePath: string, content: string): { symbols: WorkspaceSymbol[]; references: WorkspaceReference[] } {
   const sourceFile = ts.createSourceFile(filePath, content, ts.ScriptTarget.Latest, true);
@@ -69,6 +70,29 @@ export function parseTypeScript(filePath: string, content: string): { symbols: W
                     const propName = prop.name.text;
                     if (propName === 'selector') {
                       componentSelector = prop.initializer.getText(sourceFile).replace(/['"`]/g, '');
+                    } else if (propName === 'styles') {
+                      const stylesVal = prop.initializer;
+                      if (ts.isArrayLiteralExpression(stylesVal)) {
+                        for (const element of stylesVal.elements) {
+                          if (ts.isStringLiteral(element) || ts.isNoSubstitutionTemplateLiteral(element) || ts.isTemplateExpression(element)) {
+                            const inlineCss = (element as any).text || element.getText(sourceFile).slice(1, -1);
+                            const { symbols: cssSymbols, references: cssRefs } = parseCSS(filePath, inlineCss);
+                            const { line } = sourceFile.getLineAndCharacterOfPosition(element.getStart(sourceFile));
+                            const lineOffset = line; // 0-indexed line number in TS file
+                            
+                            for (const sym of cssSymbols) {
+                              sym.location.startLine += lineOffset;
+                              sym.location.endLine += lineOffset;
+                              symbols.push(sym);
+                            }
+                            for (const ref of cssRefs) {
+                              ref.location.startLine += lineOffset;
+                              ref.location.endLine += lineOffset;
+                              references.push(ref);
+                            }
+                          }
+                        }
+                      }
                     }
                   }
                 }

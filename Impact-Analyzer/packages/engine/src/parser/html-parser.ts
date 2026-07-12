@@ -1,7 +1,14 @@
 import { WorkspaceSymbol, WorkspaceReference, SourceLocation } from '../types.js';
+import { parseCSS } from './css-parser.js';
 
 export function parseHTML(filePath: string, content: string): { symbols: WorkspaceSymbol[]; references: WorkspaceReference[] } {
+  const symbols: WorkspaceSymbol[] = [];
   const references: WorkspaceReference[] = [];
+
+  // Replace JSP and HTML comments with spaces to preserve line and column offsets
+  let cleanContent = content;
+  cleanContent = cleanContent.replace(/<%--[\s\S]*?--%>/g, match => match.replace(/[^\r\n]/g, ' '));
+  cleanContent = cleanContent.replace(/<!--[\s\S]*?-->/g, match => match.replace(/[^\r\n]/g, ' '));
 
   let currentOffset = 0;
   let currentLine = 1;
@@ -13,8 +20,8 @@ export function parseHTML(filePath: string, content: string): { symbols: Workspa
       currentLine = 1;
       currentCol = 1;
     }
-    while (currentOffset < targetIndex && currentOffset < content.length) {
-      const char = content[currentOffset];
+    while (currentOffset < targetIndex && currentOffset < cleanContent.length) {
+      const char = cleanContent[currentOffset];
       if (char === '\n') {
         currentLine++;
         currentCol = 1;
@@ -26,10 +33,32 @@ export function parseHTML(filePath: string, content: string): { symbols: Workspa
     return { line: currentLine, col: currentCol };
   }
 
+  // 1. Parse inline <style>...</style> blocks
+  const styleBlockRegex = /<style[^>]*>([\s\S]*?)<\/style>/gi;
+  let styleMatch: RegExpExecArray | null;
+  while ((styleMatch = styleBlockRegex.exec(cleanContent)) !== null) {
+    const styleContent = styleMatch[1];
+    const styleIndex = styleMatch.index + styleMatch[0].indexOf(styleContent);
+    const { symbols: cssSymbols, references: cssRefs } = parseCSS(filePath, styleContent);
+    const startLoc = getLineCol(styleIndex);
+    const lineOffset = startLoc.line - 1;
+    for (const sym of cssSymbols) {
+      sym.location.startLine += lineOffset;
+      sym.location.endLine += lineOffset;
+      symbols.push(sym);
+    }
+    for (const ref of cssRefs) {
+      ref.location.startLine += lineOffset;
+      ref.location.endLine += lineOffset;
+      references.push(ref);
+    }
+  }
+
+  // 2. Parse HTML tags and attributes
   const tagRegex = /<(\/?[a-zA-Z0-9-@]+)([^>]*?)>/g;
   let match: RegExpExecArray | null;
 
-  while ((match = tagRegex.exec(content)) !== null) {
+  while ((match = tagRegex.exec(cleanContent)) !== null) {
     const fullTag = match[0];
     const tagName = match[1];
     const attrsSection = match[2];
@@ -79,6 +108,22 @@ export function parseHTML(filePath: string, content: string): { symbols: Workspa
           targetSymbolId: `style:${styleProp}`,
           location: attrLoc
         });
+      } else if (attrName.startsWith('[class.') && attrName.endsWith(']')) {
+        const cls = attrName.slice(7, -1);
+        references.push({
+          targetSymbolId: `css:.${cls}`,
+          location: attrLoc
+        });
+      } else if (attrName === '[ngClass]' || attrName === 'ngClass') {
+        const classRegex = /['"`]([a-zA-Z0-9_-]+)['"`]/g;
+        let classMatch: RegExpExecArray | null;
+        while ((classMatch = classRegex.exec(attrVal)) !== null) {
+          const cls = classMatch[1];
+          references.push({
+            targetSymbolId: `css:.${cls}`,
+            location: attrLoc
+          });
+        }
       } else if (attrName.startsWith('[') && attrName.endsWith(']')) {
         const inputProp = attrName.slice(1, -1);
         references.push({
@@ -101,15 +146,9 @@ export function parseHTML(filePath: string, content: string): { symbols: Workspa
             });
           }
         }
-      } else if (attrName.startsWith('[class.')) {
-        const cls = attrName.slice(7, -1);
-        references.push({
-          targetSymbolId: `css:.${cls}`,
-          location: attrLoc
-        });
       }
     }
   }
 
-  return { symbols: [], references };
+  return { symbols, references };
 }

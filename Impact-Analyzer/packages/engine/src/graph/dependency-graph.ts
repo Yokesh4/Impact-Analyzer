@@ -127,17 +127,42 @@ export class DependencyGraph {
           type: sym.type,
           filePath: filePath
         });
+
+        if (sym.type === 'component' && sym.metadata?.selector) {
+          this.addEdge(sym.id, `selector:${sym.metadata.selector}`);
+        }
       }
     }
 
     for (const [filePath, fileIndex] of Object.entries(indexer.files)) {
       let ownerId = '';
+      const ext = path.extname(filePath).toLowerCase();
 
-      const majorSymbol = fileIndex.symbols.find(s => s.type === 'component' || s.type === 'service' || s.type === 'module' || s.type === 'route');
-      if (majorSymbol) {
-        ownerId = majorSymbol.id;
+      if (ext === '.html' || ext === '.jsp') {
+        const relPath = path.relative(indexer.workspaceRoot, filePath).replace(/\\/g, '/');
+        ownerId = `page:${relPath}`;
+        this.addNode({
+          id: ownerId,
+          name: path.basename(filePath),
+          type: ext === '.jsp' ? 'jsp-page' : 'html-page',
+          filePath: filePath
+        });
+
       } else {
-        ownerId = fileToComponentMap.get(filePath) || '';
+        const majorSymbol = fileIndex.symbols.find(s => s.type === 'component' || s.type === 'service' || s.type === 'module' || s.type === 'route');
+        if (majorSymbol) {
+          ownerId = majorSymbol.id;
+        } else {
+          ownerId = fileToComponentMap.get(filePath) || '';
+        }
+      }
+
+      if (ownerId) {
+        for (const sym of fileIndex.symbols) {
+          if (sym.id !== ownerId && (sym.type === 'css-selector' || sym.type === 'scss-variable' || sym.type === 'scss-mixin' || sym.type === 'input' || sym.type === 'output')) {
+            this.addEdge(sym.id, ownerId);
+          }
+        }
       }
 
       for (const ref of fileIndex.references) {

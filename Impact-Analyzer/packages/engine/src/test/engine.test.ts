@@ -78,6 +78,30 @@ describe('Impact Guard Core Engine Tests', () => {
       expect(references.some(r => r.targetSymbolId === 'css:.card')).toBe(true);
       expect(references.some(r => r.targetSymbolId === 'css:.container')).toBe(true);
     });
+
+    it('should skip HTML and JSP comments without shifting line numbers', () => {
+      const template = `
+        <div class="container">
+          <!-- <app-user-profile [username]="currentUser" (logout)="onLogout()"></app-user-profile> -->
+          <%-- <app-admin-panel></app-admin-panel> --%>
+          <span class="active-badge">Active</span>
+        </div>
+      `;
+      const { references } = parseHTML('test.html', template);
+
+      // Commented components should NOT be referenced
+      expect(references.some(r => r.targetSymbolId === 'selector:app-user-profile')).toBe(false);
+      expect(references.some(r => r.targetSymbolId === 'selector:app-admin-panel')).toBe(false);
+      
+      // Active elements after comments should be correctly parsed with correct line numbers
+      const spanRef = references.find(r => r.targetSymbolId === 'selector:span');
+      expect(spanRef).toBeDefined();
+      expect(spanRef?.location.startLine).toBe(5);
+
+      const activeBadgeRef = references.find(r => r.targetSymbolId === 'css:.active-badge');
+      expect(activeBadgeRef).toBeDefined();
+      expect(activeBadgeRef?.location.startLine).toBe(5);
+    });
   });
 
   describe('CSS/SCSS/LESS Parser', () => {
@@ -105,8 +129,57 @@ describe('Impact Guard Core Engine Tests', () => {
       expect(symbols.some(s => s.id === 'mixin:center-flex')).toBe(true);
       expect(symbols.some(s => s.id === 'css:.dashboard')).toBe(true);
       expect(symbols.some(s => s.id === 'css:.dashboard.active')).toBe(true);
-      expect(references.some(r => r.targetSymbolId === 'mixin:center-flex')).toBe(true);
+        expect(references.some(r => r.targetSymbolId === 'mixin:center-flex')).toBe(true);
       expect(references.some(r => r.targetSymbolId === 'var:$primary-color')).toBe(true);
+    });
+
+    it('should correctly parse LESS files containing comments with commas and dots without corrupting selectors', () => {
+      const style = `
+        // Toolbar row (board selector, team, avatars, action icons)
+        .kanban-toolbar {
+          background: #fff;
+          
+          // Tighten spacing around the filter button (override global 11px right margin)
+          .filter-button {
+            margin-right: 2px;
+          }
+        }
+      `;
+      const { symbols } = parseCSS('test.less', style);
+      expect(symbols.some(s => s.id === 'css:.kanban-toolbar')).toBe(true);
+      expect(symbols.some(s => s.id === 'css:.kanban-toolbar .filter-button')).toBe(true);
+      expect(symbols.some(s => s.id === 'css:.filter-button')).toBe(true);
+      // Ensure that there are no symbols with corrupted names due to comments
+      expect(symbols.some(s => s.id.includes('Toolbar row'))).toBe(false);
+      expect(symbols.some(s => s.id.includes('Tighten spacing'))).toBe(false);
+    });
+
+    it('should correctly parse CSS selectors with comments inside/before them preserving precise offsets', () => {
+      const style = `
+        /* Top-level banner styles */
+        .banner {
+          background: #eee;
+        }
+
+        .item, 
+        // Inline item comment here
+        .item-active {
+          color: green;
+        }
+      `;
+      const { symbols } = parseCSS('styles.css', style);
+
+      const bannerSym = symbols.find(s => s.id === 'css:.banner');
+      expect(bannerSym).toBeDefined();
+      expect(bannerSym?.location.startLine).toBe(3); // Line of .banner
+
+      const itemSym = symbols.find(s => s.id === 'css:.item');
+      expect(itemSym).toBeDefined();
+      expect(itemSym?.location.startLine).toBe(7); // Line of .item
+
+      const activeItemSyms = symbols.filter(s => s.id === 'css:.item-active');
+      expect(activeItemSyms.length).toBeGreaterThan(0);
+      expect(activeItemSyms.some(s => s.location.startLine === 9)).toBe(true);
     });
   });
 
@@ -152,7 +225,7 @@ describe('Impact Guard Core Engine Tests', () => {
   describe('Cache Portability (Relative Paths)', () => {
     it('should save cache with relative paths and load it back with absolute paths', () => {
       const fs = require('fs');
-      const workspaceRoot = path.resolve(__dirname);
+      const workspaceRoot = path.resolve(__dirname).replace(/^[A-Z]:/, match => match.toLowerCase());
       const indexer = new WorkspaceIndexer(workspaceRoot);
 
       const testFileAbs = path.join(workspaceRoot, 'test-file.ts');
@@ -203,6 +276,130 @@ describe('Impact Guard Core Engine Tests', () => {
           fs.unlinkSync(tempCacheFile);
         }
       }
+    });
+  });
+
+  describe('CSS Range Expansion', () => {
+    it('should expand selector and class symbol ranges to the closing brace', () => {
+      const style = `
+        .shared-dropdown {
+          padding: 10px;
+          margin: 5px;
+        }
+      `;
+      const { symbols } = parseCSS('styles.css', style);
+      const classSym = symbols.find(s => s.id === 'css:.shared-dropdown');
+      expect(classSym).toBeDefined();
+      expect(classSym?.location.startLine).toBe(2);
+      expect(classSym?.location.endLine).toBe(5);
+    });
+  });
+
+  describe('JSP and Standalone Pages Support', () => {
+    it('should index .jsp files and treat them as HTML files', async () => {
+      const workspaceRoot = path.resolve(__dirname);
+      const indexer = new WorkspaceIndexer(workspaceRoot);
+      const testJspFile = path.join(workspaceRoot, 'dropdown.jsp');
+      
+      indexer.files[testJspFile] = {
+        filePath: testJspFile,
+        lastModified: Date.now(),
+        symbols: [],
+        references: [
+          { targetSymbolId: 'css:.shared-dropdown', location: { filePath: testJspFile, startLine: 2, startCol: 9, endLine: 2, endCol: 37 } }
+        ]
+      };
+
+      const graph = new DependencyGraph();
+      graph.buildGraph(indexer);
+
+      const relPath = path.relative(workspaceRoot, testJspFile).replace(/\\/g, '/');
+      expect(graph.nodes.has(`page:${relPath}`)).toBe(true);
+      const node = graph.nodes.get(`page:${relPath}`);
+      expect(node?.type).toBe('jsp-page');
+
+      const downstream = graph.getDownstream('css:.shared-dropdown');
+      expect(downstream).toContain(`page:${relPath}`);
+    });
+  });
+
+  describe('Inline Style Tag Parsing', () => {
+    it('should parse class selectors inside style tags in HTML files and adjust locations', () => {
+      const html = `
+        <style>
+          .inline-dropdown-class {
+            color: red;
+          }
+        </style>
+      `;
+      const { symbols } = parseHTML('dropdown.html', html);
+      const classSym = symbols.find(s => s.id === 'css:.inline-dropdown-class');
+      expect(classSym).toBeDefined();
+      expect(classSym?.location.startLine).toBe(3);
+      expect(classSym?.location.endLine).toBe(5);
+    });
+  });
+
+  describe('Component Inline Styles and Transitive Styling Dependency', () => {
+    it('should parse inline styles in component TS files and propagate CSS class changes through component selectors to HTML templates', () => {
+      const tsCode = `
+        import { Component } from '@angular/core';
+        @Component({
+          selector: 'app-custom-dropdown',
+          styles: [\`
+            .custom-dropdown-container {
+              background: blue;
+            }
+          \`]
+        })
+        export class CustomDropdownComponent {}
+      `;
+
+      const { symbols, references } = parseTypeScript('dropdown.component.ts', tsCode);
+      const styleSym = symbols.find(s => s.id === 'css:.custom-dropdown-container');
+      expect(styleSym).toBeDefined();
+      expect(styleSym?.location.startLine).toBeGreaterThan(3);
+
+      const workspaceRoot = path.resolve(__dirname);
+      const indexer = new WorkspaceIndexer(workspaceRoot);
+      const dropdownTsFile = path.join(workspaceRoot, 'dropdown.component.ts');
+      const pageHtmlFile = path.join(workspaceRoot, 'page.html');
+
+      indexer.files[dropdownTsFile] = {
+        filePath: dropdownTsFile,
+        lastModified: 100,
+        symbols,
+        references
+      };
+
+      indexer.files[pageHtmlFile] = {
+        filePath: pageHtmlFile,
+        lastModified: 100,
+        symbols: [],
+        references: [
+          { targetSymbolId: 'selector:app-custom-dropdown', location: { filePath: pageHtmlFile, startLine: 2, startCol: 1, endLine: 2, endCol: 30 } }
+        ]
+      };
+
+      const graph = new DependencyGraph();
+      graph.buildGraph(indexer);
+
+      const relPagePath = path.relative(workspaceRoot, pageHtmlFile).replace(/\\/g, '/');
+      const downstream = graph.getDownstream('css:.custom-dropdown-container');
+      expect(downstream).toContain('component:CustomDropdownComponent');
+      expect(downstream).toContain('selector:app-custom-dropdown');
+      expect(downstream).toContain(`page:${relPagePath}`);
+    });
+  });
+
+  describe('ngClass Dynamic Reference Parsing', () => {
+    it('should extract CSS class references inside ngClass attribute value', () => {
+      const html = `
+        <div [ngClass]="{'btn-primary': active, 'show': isExpanded}">Dropdown</div>
+      `;
+      const { references } = parseHTML('dropdown.html', html);
+      expect(references.some(r => r.targetSymbolId === 'css:.btn-primary')).toBe(true);
+      expect(references.some(r => r.targetSymbolId === 'css:.show')).toBe(true);
     });
   });
 });

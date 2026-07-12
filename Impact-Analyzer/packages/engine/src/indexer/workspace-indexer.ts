@@ -7,10 +7,43 @@ import { parseCSS } from '../parser/css-parser.js';
 
 export class WorkspaceIndexer {
   public files: Record<string, FileIndex> = {};
-  private workspaceRoot: string = '';
+  public workspaceRoot: string = '';
 
   constructor(workspaceRoot: string) {
-    this.workspaceRoot = path.resolve(workspaceRoot);
+    this.workspaceRoot = this.normalizePath(workspaceRoot);
+  }
+
+  private normalizePath(p: string): string {
+    const resolved = path.resolve(p);
+    if (resolved && resolved.length > 1 && resolved[1] === ':') {
+      return resolved[0].toLowerCase() + resolved.slice(1);
+    }
+    return resolved;
+  }
+
+  private healAbsolutePath(cachedPath: string, cacheFilePath: string): string {
+    if (!path.isAbsolute(cachedPath)) {
+      return cachedPath;
+    }
+    const normalizedCached = this.normalizePath(cachedPath);
+
+    const currentCacheDir = this.normalizePath(path.dirname(cacheFilePath));
+    const packagesIdx = normalizedCached.indexOf('/packages/');
+    if (packagesIdx !== -1) {
+      const rel = normalizedCached.substring(packagesIdx + 1);
+      return this.normalizePath(path.resolve(this.workspaceRoot, rel));
+    }
+
+    const parts = normalizedCached.split('/');
+    for (let i = 0; i < parts.length - 1; i++) {
+      const subPath = parts.slice(i).join('/');
+      const candidate = this.normalizePath(path.resolve(this.workspaceRoot, subPath));
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    }
+
+    return normalizedCached;
   }
 
   public async indexWorkspace(progressCallback?: (percentage: number, msg: string) => void, customFiles?: string[]): Promise<void> {
@@ -37,7 +70,7 @@ export class WorkspaceIndexer {
   }
 
   public async indexFile(filePath: string, force: boolean = false): Promise<boolean> {
-    const absolutePath = path.resolve(filePath);
+    const absolutePath = this.normalizePath(filePath);
     let stat: fs.Stats;
     try {
       stat = await fs.promises.stat(absolutePath);
@@ -63,7 +96,7 @@ export class WorkspaceIndexer {
       const parsed = parseTypeScript(absolutePath, content);
       symbols = parsed.symbols;
       references = parsed.references;
-    } else if (ext === '.html') {
+    } else if (ext === '.html' || ext === '.jsp') {
       const parsed = parseHTML(absolutePath, content);
       symbols = parsed.symbols;
       references = parsed.references;
@@ -84,7 +117,7 @@ export class WorkspaceIndexer {
   }
 
   public removeFile(filePath: string): void {
-    const absolutePath = path.resolve(filePath);
+    const absolutePath = this.normalizePath(filePath);
     delete this.files[absolutePath];
   }
 
@@ -108,8 +141,8 @@ export class WorkspaceIndexer {
         results.push(...this.findFiles(absolutePath));
       } else {
         const ext = path.extname(absolutePath).toLowerCase();
-        if (['.ts', '.html', '.css', '.scss', '.less'].includes(ext)) {
-          results.push(absolutePath);
+        if (['.ts', '.html', '.css', '.scss', '.less', '.jsp'].includes(ext)) {
+          results.push(this.normalizePath(absolutePath));
         }
       }
     }
@@ -117,54 +150,64 @@ export class WorkspaceIndexer {
   }
 
   private toRelative(absolutePath: string): string {
-    const relative = path.relative(this.workspaceRoot, absolutePath);
+    const normalizedAbs = this.normalizePath(absolutePath);
+    const relative = path.relative(this.workspaceRoot, normalizedAbs);
     return relative.replace(/\\/g, '/');
   }
 
   private toAbsolute(relativePath: string): string {
-    if (path.isAbsolute(relativePath)) {
-      return path.resolve(relativePath);
+    const normalizedRel = relativePath.replace(/\\/g, '/');
+    if (path.isAbsolute(normalizedRel)) {
+      return this.normalizePath(normalizedRel);
     }
-    return path.resolve(this.workspaceRoot, relativePath);
+    return this.normalizePath(path.resolve(this.workspaceRoot, normalizedRel));
   }
 
   private serializeFileIndex(fileIndex: FileIndex): FileIndex {
     return {
       filePath: this.toRelative(fileIndex.filePath),
       lastModified: fileIndex.lastModified,
-      symbols: fileIndex.symbols.map(sym => ({
+      symbols: (fileIndex.symbols || []).map(sym => ({
         ...sym,
         location: {
           ...sym.location,
-          filePath: sym.location.filePath ? this.toRelative(sym.location.filePath) : ''
+          filePath: sym.location?.filePath ? this.toRelative(sym.location.filePath) : ''
         }
       })),
-      references: fileIndex.references.map(ref => ({
+      references: (fileIndex.references || []).map(ref => ({
         ...ref,
         location: {
           ...ref.location,
-          filePath: ref.location.filePath ? this.toRelative(ref.location.filePath) : ''
+          filePath: ref.location?.filePath ? this.toRelative(ref.location.filePath) : ''
         }
       }))
     };
   }
 
-  private deserializeFileIndex(fileIndex: FileIndex): FileIndex {
+  private deserializeFileIndex(fileIndex: FileIndex, cacheFilePath?: string): FileIndex {
+    const resolvePath = (p: string) => {
+      if (p && cacheFilePath) {
+        const healed = this.healAbsolutePath(p, cacheFilePath);
+        return this.toAbsolute(healed);
+      }
+      return this.toAbsolute(p || '');
+    };
+
     return {
-      filePath: this.toAbsolute(fileIndex.filePath),
-      lastModified: fileIndex.lastModified,
-      symbols: fileIndex.symbols.map(sym => ({
+      filePath: resolvePath(fileIndex.filePath),
+      lastModified: fileIndex.lastModified || 0,
+      symbols: (fileIndex.symbols || []).map(sym => ({
         ...sym,
         location: {
           ...sym.location,
-          filePath: sym.location.filePath ? this.toAbsolute(sym.location.filePath) : ''
+          filePath: sym.location?.filePath ? resolvePath(sym.location.filePath) : ''
         }
       })),
-      references: fileIndex.references.map(ref => ({
+      references: (fileIndex.references || []).map(ref => ({
         ...ref,
         location: {
           ...ref.location,
-          filePath: ref.location.filePath ? this.toAbsolute(ref.location.filePath) : ''
+          filePath: ref.location?.filePath ? resolvePath(ref.location.filePath) : ''
         }
       }))
     };
@@ -193,8 +236,9 @@ export class WorkspaceIndexer {
       if (data.version === '1.0.0') {
         const deserializedFiles: Record<string, FileIndex> = {};
         for (const [relPath, fileIndex] of Object.entries(data.files)) {
-          const absKey = this.toAbsolute(relPath);
-          deserializedFiles[absKey] = this.deserializeFileIndex(fileIndex);
+          const healedRelPath = this.healAbsolutePath(relPath, cacheFilePath);
+          const absKey = this.toAbsolute(healedRelPath);
+          deserializedFiles[absKey] = this.deserializeFileIndex(fileIndex, cacheFilePath);
         }
         this.files = deserializedFiles;
         return true;

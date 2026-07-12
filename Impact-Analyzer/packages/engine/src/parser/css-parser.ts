@@ -1,6 +1,10 @@
 import { WorkspaceSymbol, WorkspaceReference, SourceLocation } from '../types.js';
 
 export function parseCSS(filePath: string, content: string): { symbols: WorkspaceSymbol[]; references: WorkspaceReference[] } {
+  // Replace single-line and multi-line comments with spaces to preserve line and column offsets
+  content = content.replace(/\/\*[\s\S]*?\*\//g, match => match.replace(/[^\r\n]/g, ' '));
+  content = content.replace(/\/\/.*/g, match => match.replace(/[^\r\n]/g, ' '));
+
   const symbols: WorkspaceSymbol[] = [];
   const references: WorkspaceReference[] = [];
 
@@ -29,7 +33,7 @@ export function parseCSS(filePath: string, content: string): { symbols: Workspac
 
   let index = 0;
   const length = content.length;
-  const selectorStack: { raw: string; resolved: string; start: number }[] = [];
+  const selectorStack: { raw: string; resolved: string; start: number; symbolsCreated: WorkspaceSymbol[] }[] = [];
 
   while (index < length) {
     const char = content[index];
@@ -167,10 +171,14 @@ export function parseCSS(filePath: string, content: string): { symbols: Workspac
       while (scanStart >= 0 && content[scanStart] !== ';' && content[scanStart] !== '}' && content[scanStart] !== '{') {
         scanStart--;
       }
-      const rawSelector = content.substring(scanStart + 1, index).trim();
+      let rawSelector = content.substring(scanStart + 1, index).trim();
+      rawSelector = rawSelector
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/\/\/.*/g, '')
+        .trim();
 
       if (rawSelector.startsWith('@media') || rawSelector.startsWith('@keyframes') || rawSelector.startsWith('@supports')) {
-        selectorStack.push({ raw: rawSelector, resolved: '', start: index });
+        selectorStack.push({ raw: rawSelector, resolved: '', start: index, symbolsCreated: [] });
         index++;
         continue;
       }
@@ -187,7 +195,8 @@ export function parseCSS(filePath: string, content: string): { symbols: Workspac
         resolved = rawSelector;
       }
 
-      selectorStack.push({ raw: rawSelector, resolved, start: index });
+      const stackEntry = { raw: rawSelector, resolved, start: index, symbolsCreated: [] as WorkspaceSymbol[] };
+      selectorStack.push(stackEntry);
 
       if (resolved) {
         const selectorsList = resolved.split(',');
@@ -195,7 +204,7 @@ export function parseCSS(filePath: string, content: string): { symbols: Workspac
           sel = sel.trim();
           if (sel) {
             const fullStartLoc = getLineCol(index - rawSelector.length);
-            symbols.push({
+            const selectorSymbol: WorkspaceSymbol = {
               id: `css:${sel}`,
               name: sel,
               type: 'css-selector',
@@ -206,14 +215,16 @@ export function parseCSS(filePath: string, content: string): { symbols: Workspac
                 endLine: fullStartLoc.line,
                 endCol: fullStartLoc.col + rawSelector.length
               }
-            });
+            };
+            symbols.push(selectorSymbol);
+            stackEntry.symbolsCreated.push(selectorSymbol);
 
             const classRegex = /\.([a-zA-Z0-9_-]+)/g;
             let classMatch: RegExpExecArray | null;
             while ((classMatch = classRegex.exec(sel)) !== null) {
               const className = classMatch[1];
               const startLoc = getLineCol(index - rawSelector.length + rawSelector.indexOf(classMatch[0]));
-              symbols.push({
+              const classSymbol: WorkspaceSymbol = {
                 id: `css:.${className}`,
                 name: `.${className}`,
                 type: 'css-selector',
@@ -224,7 +235,9 @@ export function parseCSS(filePath: string, content: string): { symbols: Workspac
                   endLine: startLoc.line,
                   endCol: startLoc.col + classMatch[0].length
                 }
-              });
+              };
+              symbols.push(classSymbol);
+              stackEntry.symbolsCreated.push(classSymbol);
             }
           }
         }
@@ -235,7 +248,14 @@ export function parseCSS(filePath: string, content: string): { symbols: Workspac
     }
 
     if (char === '}') {
-      selectorStack.pop();
+      const entry = selectorStack.pop();
+      if (entry) {
+        const endLoc = getLineCol(index);
+        for (const sym of entry.symbolsCreated) {
+          sym.location.endLine = endLoc.line;
+          sym.location.endCol = endLoc.col + 1;
+        }
+      }
       index++;
       continue;
     }
