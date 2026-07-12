@@ -140,18 +140,20 @@ export async function activate(context: vscode.ExtensionContext) {
     })
   );
 
+  const docSelector: vscode.DocumentFilter[] = [
+    { scheme: 'file', language: 'typescript' },
+    { scheme: 'file', language: 'html' },
+    { scheme: 'file', language: 'css' },
+    { scheme: 'file', language: 'scss' },
+    { scheme: 'file', language: 'less' }
+  ];
+
   context.subscriptions.push(
-    vscode.languages.registerCodeLensProvider(
-      { scheme: 'file', pattern: '**/*.{ts,html,css,scss,less}' },
-      new ImpactCodeLensProvider()
-    )
+    vscode.languages.registerCodeLensProvider(docSelector, new ImpactCodeLensProvider())
   );
 
   context.subscriptions.push(
-    vscode.languages.registerHoverProvider(
-      { scheme: 'file', pattern: '**/*.{ts,html,css,scss,less}' },
-      new ImpactHoverProvider()
-    )
+    vscode.languages.registerHoverProvider(docSelector, new ImpactHoverProvider())
   );
 
   context.subscriptions.push(

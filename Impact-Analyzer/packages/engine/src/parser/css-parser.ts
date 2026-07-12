@@ -4,18 +4,27 @@ export function parseCSS(filePath: string, content: string): { symbols: Workspac
   const symbols: WorkspaceSymbol[] = [];
   const references: WorkspaceReference[] = [];
 
-  function getLineCol(index: number): { line: number; col: number } {
-    let line = 1;
-    let col = 1;
-    for (let i = 0; i < index; i++) {
-      if (content[i] === '\n') {
-        line++;
-        col = 1;
-      } else if (content[i] !== '\r') {
-        col++;
-      }
+  let currentOffset = 0;
+  let currentLine = 1;
+  let currentCol = 1;
+
+  function getLineCol(targetIndex: number): { line: number; col: number } {
+    if (targetIndex < currentOffset) {
+      currentOffset = 0;
+      currentLine = 1;
+      currentCol = 1;
     }
-    return { line, col };
+    while (currentOffset < targetIndex && currentOffset < content.length) {
+      const char = content[currentOffset];
+      if (char === '\n') {
+        currentLine++;
+        currentCol = 1;
+      } else if (char !== '\r') {
+        currentCol++;
+      }
+      currentOffset++;
+    }
+    return { line: currentLine, col: currentCol };
   }
 
   let index = 0;
