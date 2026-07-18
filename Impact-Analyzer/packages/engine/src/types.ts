@@ -39,6 +39,19 @@ export interface FileIndex {
   lastModified: number;
   symbols: WorkspaceSymbol[];
   references: WorkspaceReference[];
+  imports?: string[]; // Resolved import paths for @import chains (LESS/CSS/SCSS)
+}
+
+/** Represents a CSS selector hierarchy node for parent-child-grandchild tracking */
+export interface CSSHierarchyNode {
+  /** The full resolved selector (e.g., ".parent .child .grandchild") */
+  fullSelector: string;
+  /** Individual class names extracted from this selector */
+  classNames: string[];
+  /** Parent selector in the nesting chain (null if root-level) */
+  parentSelector: string | null;
+  /** Direct child selectors */
+  children: CSSHierarchyNode[];
 }
 
 export interface DependencyNode {
@@ -65,10 +78,30 @@ export interface ImpactNode {
   pathFromTrigger: string[];
 }
 
+/** Grouped counts of affected items by type for clear UI display */
+export interface ImpactGroupedCounts {
+  pages: number;
+  components: number;
+  modules: number;
+  routes: number;
+  selectors: number;
+}
+
+/** Hierarchy entry for hover UI — shows nesting chain */
+export interface HierarchyEntry {
+  selector: string;
+  depth: number;
+  affectedCount: number;
+}
+
 export interface ImpactReport {
   triggerSymbol: WorkspaceSymbol | null;
   affectedNodes: ImpactNode[];
   overallRisk: RiskLevel;
+  /** Grouped counts for professional UI display */
+  groupedCounts?: ImpactGroupedCounts;
+  /** Hierarchy chain for hover display (parent → child → grandchild) */
+  hierarchyChain?: HierarchyEntry[];
 }
 
 export interface IndexerCache {

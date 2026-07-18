@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
-import { WorkspaceIndexer, DependencyGraph, ImpactEngine, ImpactReport, WorkspaceSymbol, RiskEngine } from '@impact-guard/engine';
+import { WorkspaceIndexer, IndexingResult, DependencyGraph, ImpactEngine, ImpactReport, WorkspaceSymbol, RiskEngine, ImpactGroupedCounts } from '@impact-guard/engine';
 
 let indexer: WorkspaceIndexer;
 let graph: DependencyGraph;
@@ -9,6 +9,10 @@ let impactEngine: ImpactEngine;
 let diagnosticCollection: vscode.DiagnosticCollection;
 let treeDataProvider: ImpactTreeProvider;
 let statusBarItem: vscode.StatusBarItem;
+
+// Highlight decoration type for sidebar click highlighting
+let highlightDecorationType: vscode.TextEditorDecorationType;
+let highlightClearTimeout: ReturnType<typeof setTimeout> | null = null;
 
 export async function activate(context: vscode.ExtensionContext) {
   console.log('Impact Guard is activating...');
@@ -24,8 +28,20 @@ export async function activate(context: vscode.ExtensionContext) {
   graph = new DependencyGraph();
   impactEngine = new ImpactEngine(indexer, graph);
 
+  // Create highlight decoration for sidebar click
+  highlightDecorationType = vscode.window.createTextEditorDecorationType({
+    backgroundColor: 'rgba(255, 213, 79, 0.35)',
+    borderColor: 'rgba(255, 152, 0, 0.6)',
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderRadius: '3px',
+    isWholeLine: false,
+    overviewRulerColor: 'rgba(255, 152, 0, 0.8)',
+    overviewRulerLane: vscode.OverviewRulerLane.Center
+  });
+
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
-  statusBarItem.text = '$(shield) Impact Guard: Indexing...';
+  statusBarItem.text = '$(shield) Impact Guard: Initializing...';
   statusBarItem.show();
   context.subscriptions.push(statusBarItem);
 
@@ -36,34 +52,18 @@ export async function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(diagnosticCollection);
 
   const cacheFilePath = path.join(workspaceRoot, '.impact-guard-cache.json');
-  
-  vscode.window.withProgress({
-    location: vscode.ProgressLocation.Window,
-    title: "Impact Guard Indexing",
-    cancellable: false
-  }, async (progress) => {
-    try {
-      let loaded = indexer.loadCache(cacheFilePath);
-      if (!loaded) {
-        const filePaths = await findWorkspaceFiles();
-        await indexer.indexWorkspace((percentage, msg) => {
-          progress.report({ message: `${percentage}% - ${msg}` });
-        }, filePaths);
-        indexer.saveCache(cacheFilePath);
-      }
-      graph.buildGraph(indexer);
-      
-      statusBarItem.text = '$(shield) Impact Guard: Active';
-      statusBarItem.tooltip = 'Click to show dependency graph';
-      statusBarItem.command = 'impact-guard.showDependencyGraph';
-    } catch (err) {
-      console.error('Error during Impact Guard activation indexing:', err);
-      statusBarItem.text = '$(warning) Impact Guard: Error';
-      statusBarItem.tooltip = 'Click to rebuild index';
-      statusBarItem.command = 'impact-guard.rebuildIndex';
-    }
-  });
 
+  // Ask user which indexing mode to use
+  const config = vscode.workspace.getConfiguration('impactGuard');
+  const configuredMode = config.get<string>('indexingMode') || 'prompt';
+
+  if (configuredMode === 'prompt') {
+    promptIndexingMode(context, workspaceRoot, cacheFilePath);
+  } else {
+    runIndexing(context, workspaceRoot, cacheFilePath, configuredMode as 'full' | 'style-focused');
+  }
+
+  // Register file save watcher
   context.subscriptions.push(
     vscode.workspace.onDidSaveTextDocument(async (doc) => {
       const ext = path.extname(doc.fileName).toLowerCase();
@@ -75,20 +75,19 @@ export async function activate(context: vscode.ExtensionContext) {
             graph.buildGraph(indexer);
             indexer.saveCache(cacheFilePath);
           }
-          statusBarItem.text = '$(shield) Impact Guard: Active';
-          statusBarItem.tooltip = 'Click to show dependency graph';
-          statusBarItem.command = 'impact-guard.showDependencyGraph';
+          updateStatusBarActive();
           triggerLineAnalysisForActiveEditor();
         } catch (err) {
           console.error('Error during Impact Guard file save auto-indexing:', err);
-          statusBarItem.text = '$(warning) Impact Guard: Error';
-          statusBarItem.tooltip = 'Click to rebuild index';
+          statusBarItem.text = '$(warning) Impact Guard: Re-index failed';
+          statusBarItem.tooltip = `Error: ${err instanceof Error ? err.message : String(err)}`;
           statusBarItem.command = 'impact-guard.rebuildIndex';
         }
       }
     })
   );
 
+  // Register commands
   context.subscriptions.push(
     vscode.commands.registerCommand('impact-guard.analyzeSymbol', async (symbolId?: string) => {
       let id = symbolId;
@@ -121,22 +120,12 @@ export async function activate(context: vscode.ExtensionContext) {
     }),
 
     vscode.commands.registerCommand('impact-guard.rebuildIndex', async () => {
-      statusBarItem.text = '$(sync~spin) Impact Guard: Rebuilding...';
-      try {
-        const filePaths = await findWorkspaceFiles();
-        await indexer.indexWorkspace(undefined, filePaths);
-        graph.buildGraph(indexer);
-        indexer.saveCache(cacheFilePath);
-        statusBarItem.text = '$(shield) Impact Guard: Active';
-        statusBarItem.tooltip = 'Click to show dependency graph';
-        statusBarItem.command = 'impact-guard.showDependencyGraph';
-        vscode.window.showInformationMessage('Impact Guard Workspace Index rebuilt.');
-      } catch (err) {
-        console.error('Error rebuilding index:', err);
-        statusBarItem.text = '$(warning) Impact Guard: Error';
-        statusBarItem.tooltip = 'Click to rebuild index';
-        statusBarItem.command = 'impact-guard.rebuildIndex';
-        vscode.window.showErrorMessage('Failed to rebuild Impact Guard Workspace Index.');
+      const config = vscode.workspace.getConfiguration('impactGuard');
+      const mode = config.get<string>('indexingMode') || 'prompt';
+      if (mode === 'prompt') {
+        promptIndexingMode(context, workspaceRoot, cacheFilePath);
+      } else {
+        runIndexing(context, workspaceRoot, cacheFilePath, mode as 'full' | 'style-focused');
       }
     }),
 
@@ -163,6 +152,57 @@ export async function activate(context: vscode.ExtensionContext) {
         fs.writeFileSync(uri.fsPath, output, 'utf-8');
         vscode.window.showInformationMessage(`Report successfully exported to: ${path.basename(uri.fsPath)}`);
       }
+    }),
+
+    // Open file and highlight the matched class range
+    vscode.commands.registerCommand('impact-guard.openAndHighlight', async (filePath: string, startLine: number, startCol: number, endLine: number, endCol: number) => {
+      if (!filePath) return;
+      const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(filePath));
+      const editor = await vscode.window.showTextDocument(doc, { preview: false });
+      
+      const start = new vscode.Position(Math.max(0, startLine - 1), Math.max(0, startCol - 1));
+      const end = new vscode.Position(Math.max(0, endLine - 1), Math.max(0, endCol - 1));
+      const range = new vscode.Range(start, end);
+
+      // Set selection and reveal the range
+      editor.selection = new vscode.Selection(start, end);
+      editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
+
+      // Apply highlight decoration
+      editor.setDecorations(highlightDecorationType, [{ range }]);
+
+      // Auto-clear highlight after 5 seconds
+      if (highlightClearTimeout) {
+        clearTimeout(highlightClearTimeout);
+      }
+      highlightClearTimeout = setTimeout(() => {
+        editor.setDecorations(highlightDecorationType, []);
+        highlightClearTimeout = null;
+      }, 5000);
+    }),
+
+    vscode.commands.registerCommand('impact-guard.showIndexingLog', () => {
+      const result = indexer.getLastIndexingResult();
+      if (!result) {
+        vscode.window.showInformationMessage('No indexing has been performed yet.');
+        return;
+      }
+      let msg = `Indexing Mode: ${result.mode === 'style-focused' ? 'Style-Focused' : 'Full Workspace'}\n`;
+      msg += `Files: ${result.successCount}/${result.totalFiles} indexed successfully\n`;
+      if (result.errorCount > 0) {
+        msg += `\nErrors (${result.errorCount}):\n`;
+        for (const err of result.errors.slice(0, 10)) {
+          msg += `  - ${path.basename(err.filePath)}: ${err.error}\n`;
+        }
+        if (result.errors.length > 10) {
+          msg += `  ... and ${result.errors.length - 10} more\n`;
+        }
+      }
+      vscode.window.showInformationMessage(msg, { modal: true });
+    }),
+
+    vscode.commands.registerCommand('impact-guard.switchIndexingMode', async () => {
+      promptIndexingMode(context, workspaceRoot, cacheFilePath);
     })
   );
 
@@ -193,9 +233,155 @@ export async function activate(context: vscode.ExtensionContext) {
         const report = impactEngine.analyzeImpact(symbol.id);
         treeDataProvider.setReport(report);
       }
+
+      // Clear highlight on cursor move
+      if (highlightClearTimeout) {
+        clearTimeout(highlightClearTimeout);
+        highlightClearTimeout = null;
+      }
+      editor.setDecorations(highlightDecorationType, []);
     })
   );
 }
+
+// ─── Indexing Mode Prompt ─────────────────────────────────────────
+
+async function promptIndexingMode(
+  context: vscode.ExtensionContext,
+  workspaceRoot: string,
+  cacheFilePath: string
+) {
+  const choice = await vscode.window.showQuickPick(
+    [
+      {
+        label: '$(telescope) Style-Focused (Recommended)',
+        description: 'Index only open style files and their @import chains — fast & accurate',
+        detail: 'Scans .less, .css, .scss files currently open + their imports + all HTML/JSP pages',
+        value: 'style-focused' as const
+      },
+      {
+        label: '$(globe) Full Workspace',
+        description: 'Index all supported files in the workspace — comprehensive',
+        detail: 'Scans all .ts, .html, .css, .scss, .less, .jsp files',
+        value: 'full' as const
+      }
+    ],
+    {
+      placeHolder: 'Select Impact Guard indexing mode',
+      title: 'Impact Guard — Choose Indexing Strategy'
+    }
+  );
+
+  if (choice) {
+    runIndexing(context, workspaceRoot, cacheFilePath, choice.value);
+  } else {
+    // Default to style-focused if dismissed
+    runIndexing(context, workspaceRoot, cacheFilePath, 'style-focused');
+  }
+}
+
+async function runIndexing(
+  context: vscode.ExtensionContext,
+  workspaceRoot: string,
+  cacheFilePath: string,
+  mode: 'full' | 'style-focused'
+) {
+  statusBarItem.text = '$(sync~spin) Impact Guard: Indexing...';
+  statusBarItem.tooltip = `Mode: ${mode === 'style-focused' ? 'Style-Focused' : 'Full Workspace'}`;
+
+  vscode.window.withProgress({
+    location: vscode.ProgressLocation.Window,
+    title: "Impact Guard Indexing",
+    cancellable: false
+  }, async (progress) => {
+    try {
+      let loaded = indexer.loadCache(cacheFilePath);
+      if (!loaded) {
+        let result: IndexingResult;
+
+        if (mode === 'style-focused') {
+          // Collect open style files
+          const openStyleFiles = getOpenStyleFiles();
+          
+          if (openStyleFiles.length === 0) {
+            // Fallback: find all root style files in workspace
+            const filePaths = await findWorkspaceStyleFiles();
+            result = await indexer.indexStyleFocused(filePaths, (percentage, msg) => {
+              progress.report({ message: `${percentage}% - ${msg}` });
+            });
+          } else {
+            result = await indexer.indexStyleFocused(openStyleFiles, (percentage, msg) => {
+              progress.report({ message: `${percentage}% - ${msg}` });
+            });
+          }
+        } else {
+          const filePaths = await findWorkspaceFiles();
+          result = await indexer.indexWorkspace((percentage, msg) => {
+            progress.report({ message: `${percentage}% - ${msg}` });
+          }, filePaths);
+        }
+
+        indexer.saveCache(cacheFilePath);
+      }
+      graph.buildGraph(indexer);
+      updateStatusBarActive();
+    } catch (err) {
+      console.error('Error during Impact Guard activation indexing:', err);
+      const result = indexer.getLastIndexingResult();
+      if (result && result.successCount > 0) {
+        // Partial success — graph may still be usable
+        try {
+          graph.buildGraph(indexer);
+          statusBarItem.text = `$(shield) Impact Guard: Active (${result.errorCount} warnings)`;
+          statusBarItem.tooltip = `${result.successCount}/${result.totalFiles} files indexed. Click to view errors.`;
+          statusBarItem.command = 'impact-guard.showIndexingLog';
+        } catch {
+          setStatusBarError();
+        }
+      } else {
+        setStatusBarError();
+      }
+    }
+  });
+}
+
+function updateStatusBarActive() {
+  const result = indexer.getLastIndexingResult();
+  const fileCount = Object.keys(indexer.files).length;
+  const modeLabel = result?.mode === 'style-focused' ? 'Style-Focused' : 'Full';
+  
+  if (result && result.errorCount > 0) {
+    statusBarItem.text = `$(shield) Impact Guard: Active (${result.errorCount} warnings)`;
+    statusBarItem.tooltip = `${modeLabel} · ${fileCount} files indexed · ${result.errorCount} errors. Click to view log.`;
+    statusBarItem.command = 'impact-guard.showIndexingLog';
+  } else {
+    statusBarItem.text = `$(shield) Impact Guard: Active`;
+    statusBarItem.tooltip = `${modeLabel} · ${fileCount} files indexed. Click to show dependency graph.`;
+    statusBarItem.command = 'impact-guard.showDependencyGraph';
+  }
+}
+
+function setStatusBarError() {
+  statusBarItem.text = '$(error) Impact Guard: Failed';
+  statusBarItem.tooltip = 'Indexing failed completely. Click to retry.';
+  statusBarItem.command = 'impact-guard.rebuildIndex';
+}
+
+function getOpenStyleFiles(): string[] {
+  const styleExts = ['.less', '.css', '.scss', '.sass'];
+  const openFiles: string[] = [];
+  
+  for (const doc of vscode.workspace.textDocuments) {
+    const ext = path.extname(doc.fileName).toLowerCase();
+    if (styleExts.includes(ext) && !doc.isUntitled) {
+      openFiles.push(doc.fileName);
+    }
+  }
+  
+  return openFiles;
+}
+
+// ─── Core Analysis Functions ──────────────────────────────────────
 
 function getSymbolAtCursor(editor: vscode.TextEditor): WorkspaceSymbol | null {
   const line = editor.selection.active.line + 1;
@@ -224,7 +410,7 @@ function runWorkspaceAnalysis() {
   for (const [id, node] of graph.nodes.entries()) {
     const downCount = graph.getDownstream(id).length;
     if (downCount > 10) {
-      criticalList.push(`${node.name} (${node.type}) -> affects ${downCount} downstreams`);
+      criticalList.push(`${node.name} (${node.type}) -> affects ${downCount} areas`);
     }
   }
   if (criticalList.length > 0) {
@@ -254,9 +440,13 @@ function updateDiagnostics(report: ImpactReport) {
       const start = new vscode.Position(report.triggerSymbol.location.startLine - 1, report.triggerSymbol.location.startCol - 1);
       const end = new vscode.Position(report.triggerSymbol.location.endLine - 1, report.triggerSymbol.location.endCol - 1);
       const range = new vscode.Range(start, end);
+      const counts = report.groupedCounts;
+      const countSummary = counts
+        ? `${counts.pages} pages, ${counts.components} components affected`
+        : `${report.affectedNodes.length} areas affected`;
       const diagnostic = new vscode.Diagnostic(
         range,
-        `Impact Guard Warning: Modifying this symbol carries a ${report.overallRisk.toUpperCase()} risk. Downstream affected count: ${report.affectedNodes.length}.`,
+        `Impact Guard: ${report.overallRisk.toUpperCase()} risk — ${countSummary}`,
         report.overallRisk === 'critical' ? vscode.DiagnosticSeverity.Error : vscode.DiagnosticSeverity.Warning
       );
       diagnosticCollection.set(fileUri, [diagnostic]);
@@ -270,8 +460,19 @@ function generateMarkdown(report: ImpactReport): string {
     md += `**Trigger Symbol:** \`${report.triggerSymbol.name}\` (${report.triggerSymbol.type})\n`;
   }
   md += `**Overall Risk:** **${report.overallRisk.toUpperCase()}**\n`;
-  md += `**Impacted Count:** ${report.affectedNodes.length} nodes\n\n`;
-  md += `## Affected Downstream Nodes\n\n`;
+  
+  if (report.groupedCounts) {
+    const c = report.groupedCounts;
+    md += `\n## Impact Summary\n\n`;
+    md += `| Category | Count |\n|----------|-------|\n`;
+    if (c.pages > 0) md += `| Pages | ${c.pages} |\n`;
+    if (c.components > 0) md += `| Components | ${c.components} |\n`;
+    if (c.modules > 0) md += `| Modules | ${c.modules} |\n`;
+    if (c.routes > 0) md += `| Routes | ${c.routes} |\n`;
+    if (c.selectors > 0) md += `| Style Selectors | ${c.selectors} |\n`;
+  }
+
+  md += `\n## Affected Areas\n\n`;
   
   if (report.affectedNodes.length > 0) {
     for (const node of report.affectedNodes) {
@@ -283,6 +484,48 @@ function generateMarkdown(report: ImpactReport): string {
   }
   return md;
 }
+
+// ─── Risk Icon Helpers ────────────────────────────────────────────
+
+function getRiskIcon(risk: string): vscode.ThemeIcon {
+  switch (risk) {
+    case 'critical': return new vscode.ThemeIcon('error', new vscode.ThemeColor('errorForeground'));
+    case 'high': return new vscode.ThemeIcon('warning', new vscode.ThemeColor('list.warningForeground'));
+    case 'medium': return new vscode.ThemeIcon('info', new vscode.ThemeColor('notificationsInfoIcon.foreground'));
+    default: return new vscode.ThemeIcon('pass', new vscode.ThemeColor('testing.iconPassed'));
+  }
+}
+
+function getRiskLabel(risk: string): string {
+  switch (risk) {
+    case 'critical': return 'CRITICAL';
+    case 'high': return 'HIGH';
+    case 'medium': return 'MEDIUM';
+    default: return 'LOW';
+  }
+}
+
+function getTypeIcon(type: string): vscode.ThemeIcon {
+  switch (type) {
+    case 'html-page':
+    case 'jsp-page':
+      return new vscode.ThemeIcon('globe');
+    case 'component':
+      return new vscode.ThemeIcon('symbol-class');
+    case 'module':
+      return new vscode.ThemeIcon('package');
+    case 'route':
+      return new vscode.ThemeIcon('symbol-interface');
+    case 'css-selector':
+      return new vscode.ThemeIcon('symbol-color');
+    case 'service':
+      return new vscode.ThemeIcon('symbol-method');
+    default:
+      return new vscode.ThemeIcon('file');
+  }
+}
+
+// ─── Tree View ────────────────────────────────────────────────────
 
 class TreeItemNode extends vscode.TreeItem {
   constructor(
@@ -316,144 +559,182 @@ class ImpactTreeProvider implements vscode.TreeDataProvider<TreeItemNode> {
 
   getChildren(element?: TreeItemNode): Thenable<TreeItemNode[]> {
     if (!this.report) {
-      return Promise.resolve([new TreeItemNode('No active impact report. Hover/click a symbol.', vscode.TreeItemCollapsibleState.None)]);
+      return Promise.resolve([new TreeItemNode('No active impact report. Hover/click a symbol.', vscode.TreeItemCollapsibleState.None, undefined, new vscode.ThemeIcon('info'))]);
     }
 
     if (!element) {
-      const rootItems = [
-        new TreeItemNode(`Trigger: ${this.report.triggerSymbol?.name || 'Unknown'}`, vscode.TreeItemCollapsibleState.None, this.report.triggerSymbol?.type, new vscode.ThemeIcon('symbol-property')),
-        new TreeItemNode(`Overall Risk: ${this.report.overallRisk.toUpperCase()}`, vscode.TreeItemCollapsibleState.None, undefined, new vscode.ThemeIcon('warning')),
-        new TreeItemNode(`Affected Components (${this.report.affectedNodes.filter(n => n.type === 'component').length})`, vscode.TreeItemCollapsibleState.Collapsed, undefined, new vscode.ThemeIcon('symbol-class')),
-        new TreeItemNode(`Affected HTML Pages (${this.report.affectedNodes.filter(n => n.type === 'html-page' as any).length})`, vscode.TreeItemCollapsibleState.Collapsed, undefined, new vscode.ThemeIcon('layout')),
-        new TreeItemNode(`Affected JSP Pages (${this.report.affectedNodes.filter(n => n.type === 'jsp-page' as any).length})`, vscode.TreeItemCollapsibleState.Collapsed, undefined, new vscode.ThemeIcon('file-code')),
-        new TreeItemNode(`Affected Modules (${this.report.affectedNodes.filter(n => n.type === 'module').length})`, vscode.TreeItemCollapsibleState.Collapsed, undefined, new vscode.ThemeIcon('package')),
-        new TreeItemNode(`Affected Routes (${this.report.affectedNodes.filter(n => n.type === 'route').length})`, vscode.TreeItemCollapsibleState.Collapsed, undefined, new vscode.ThemeIcon('symbol-interface'))
+      // Root level
+      const riskIcon = getRiskIcon(this.report.overallRisk);
+      const triggerName = this.report.triggerSymbol?.name || 'Unknown';
+      const triggerType = this.report.triggerSymbol?.type || '';
+      const counts = this.report.groupedCounts;
+
+      const rootItems: TreeItemNode[] = [
+        new TreeItemNode(
+          `${triggerName}`,
+          vscode.TreeItemCollapsibleState.None,
+          triggerType,
+          new vscode.ThemeIcon('symbol-property')
+        ),
+        new TreeItemNode(
+          `Risk: ${getRiskLabel(this.report.overallRisk)}`,
+          vscode.TreeItemCollapsibleState.None,
+          undefined,
+          riskIcon
+        )
       ];
+
+      // Add category groups with counts
+      const pages = this.report.affectedNodes.filter(n => n.type === 'html-page' || n.type === 'jsp-page');
+      const components = this.report.affectedNodes.filter(n => n.type === 'component');
+      const modules = this.report.affectedNodes.filter(n => n.type === 'module');
+      const routes = this.report.affectedNodes.filter(n => n.type === 'route');
+      const selectors = this.report.affectedNodes.filter(n => n.type === 'css-selector' || n.type === 'scss-variable' || n.type === 'scss-mixin');
+
+      if (pages.length > 0) {
+        rootItems.push(new TreeItemNode(
+          `Affected Pages (${pages.length})`,
+          vscode.TreeItemCollapsibleState.Collapsed,
+          undefined,
+          new vscode.ThemeIcon('globe')
+        ));
+      }
+      if (components.length > 0) {
+        rootItems.push(new TreeItemNode(
+          `Affected Components (${components.length})`,
+          vscode.TreeItemCollapsibleState.Collapsed,
+          undefined,
+          new vscode.ThemeIcon('symbol-class')
+        ));
+      }
+      if (modules.length > 0) {
+        rootItems.push(new TreeItemNode(
+          `Affected Modules (${modules.length})`,
+          vscode.TreeItemCollapsibleState.Collapsed,
+          undefined,
+          new vscode.ThemeIcon('package')
+        ));
+      }
+      if (routes.length > 0) {
+        rootItems.push(new TreeItemNode(
+          `Affected Routes (${routes.length})`,
+          vscode.TreeItemCollapsibleState.Collapsed,
+          undefined,
+          new vscode.ThemeIcon('symbol-interface')
+        ));
+      }
+      if (selectors.length > 0) {
+        rootItems.push(new TreeItemNode(
+          `Affected Selectors (${selectors.length})`,
+          vscode.TreeItemCollapsibleState.Collapsed,
+          undefined,
+          new vscode.ThemeIcon('symbol-color')
+        ));
+      }
+
+      // Hierarchy chain if available
+      if (this.report.hierarchyChain && this.report.hierarchyChain.length > 0) {
+        rootItems.push(new TreeItemNode(
+          `Nesting Hierarchy (${this.report.hierarchyChain.length})`,
+          vscode.TreeItemCollapsibleState.Collapsed,
+          undefined,
+          new vscode.ThemeIcon('list-tree')
+        ));
+      }
+
       return Promise.resolve(rootItems);
     }
 
+    // Children for each category
     const label = element.label;
+
+    if (label.startsWith('Affected Pages')) {
+      return Promise.resolve(this.buildNodeItems(
+        this.report.affectedNodes.filter(n => n.type === 'html-page' || n.type === 'jsp-page'),
+        new vscode.ThemeIcon('globe')
+      ));
+    }
     if (label.startsWith('Affected Components')) {
-      const items = this.report.affectedNodes
-        .filter(n => n.type === 'component')
-        .map(n => {
-          let emoji = '🟢';
-          if (n.risk === 'critical') emoji = '🔴';
-          else if (n.risk === 'high') emoji = '🟠';
-          else if (n.risk === 'medium') emoji = '🟡';
-          
-          return new TreeItemNode(
-            `${emoji} ${n.name}`,
-            vscode.TreeItemCollapsibleState.None,
-            path.basename(n.filePath),
-            new vscode.ThemeIcon('symbol-class'),
-            {
-              title: 'Open File',
-              command: 'vscode.open',
-              arguments: [vscode.Uri.file(n.filePath)]
-            }
-          );
-        });
-      return Promise.resolve(items);
-    }
-    if (label.startsWith('Affected HTML Pages')) {
-      const items = this.report.affectedNodes
-        .filter(n => n.type === 'html-page' as any)
-        .map(n => {
-          let emoji = '🟢';
-          if (n.risk === 'critical') emoji = '🔴';
-          else if (n.risk === 'high') emoji = '🟠';
-          else if (n.risk === 'medium') emoji = '🟡';
-          
-          return new TreeItemNode(
-            `${emoji} ${n.name}`,
-            vscode.TreeItemCollapsibleState.None,
-            path.basename(n.filePath),
-            new vscode.ThemeIcon('layout'),
-            {
-              title: 'Open File',
-              command: 'vscode.open',
-              arguments: [vscode.Uri.file(n.filePath)]
-            }
-          );
-        });
-      return Promise.resolve(items);
-    }
-    if (label.startsWith('Affected JSP Pages')) {
-      const items = this.report.affectedNodes
-        .filter(n => n.type === 'jsp-page' as any)
-        .map(n => {
-          let emoji = '🟢';
-          if (n.risk === 'critical') emoji = '🔴';
-          else if (n.risk === 'high') emoji = '🟠';
-          else if (n.risk === 'medium') emoji = '🟡';
-          
-          return new TreeItemNode(
-            `${emoji} ${n.name}`,
-            vscode.TreeItemCollapsibleState.None,
-            path.basename(n.filePath),
-            new vscode.ThemeIcon('file-code'),
-            {
-              title: 'Open File',
-              command: 'vscode.open',
-              arguments: [vscode.Uri.file(n.filePath)]
-            }
-          );
-        });
-      return Promise.resolve(items);
+      return Promise.resolve(this.buildNodeItems(
+        this.report.affectedNodes.filter(n => n.type === 'component'),
+        new vscode.ThemeIcon('symbol-class')
+      ));
     }
     if (label.startsWith('Affected Modules')) {
-      const items = this.report.affectedNodes
-        .filter(n => n.type === 'module')
-        .map(n => {
-          let emoji = '🟢';
-          if (n.risk === 'critical') emoji = '🔴';
-          else if (n.risk === 'high') emoji = '🟠';
-          else if (n.risk === 'medium') emoji = '🟡';
-
-          return new TreeItemNode(
-            `${emoji} ${n.name}`,
-            vscode.TreeItemCollapsibleState.None,
-            path.basename(n.filePath),
-            new vscode.ThemeIcon('package'),
-            {
-              title: 'Open File',
-              command: 'vscode.open',
-              arguments: [vscode.Uri.file(n.filePath)]
-            }
-          );
-        });
-      return Promise.resolve(items);
+      return Promise.resolve(this.buildNodeItems(
+        this.report.affectedNodes.filter(n => n.type === 'module'),
+        new vscode.ThemeIcon('package')
+      ));
     }
     if (label.startsWith('Affected Routes')) {
-      const items = this.report.affectedNodes
-        .filter(n => n.type === 'route')
-        .map(n => {
-          let emoji = '🟢';
-          if (n.risk === 'critical') emoji = '🔴';
-          else if (n.risk === 'high') emoji = '🟠';
-          else if (n.risk === 'medium') emoji = '🟡';
-
-          const cmd = n.filePath ? {
-            title: 'Open Routing Config',
-            command: 'vscode.open',
-            arguments: [vscode.Uri.file(n.filePath)]
-          } : undefined;
-
-          return new TreeItemNode(
-            `${emoji} ${n.name}`,
-            vscode.TreeItemCollapsibleState.None,
-            'Route Definition',
-            new vscode.ThemeIcon('symbol-interface'),
-            cmd
-          );
-        });
+      return Promise.resolve(this.buildNodeItems(
+        this.report.affectedNodes.filter(n => n.type === 'route'),
+        new vscode.ThemeIcon('symbol-interface')
+      ));
+    }
+    if (label.startsWith('Affected Selectors')) {
+      return Promise.resolve(this.buildNodeItems(
+        this.report.affectedNodes.filter(n => n.type === 'css-selector' || n.type === 'scss-variable' || n.type === 'scss-mixin'),
+        new vscode.ThemeIcon('symbol-color')
+      ));
+    }
+    if (label.startsWith('Nesting Hierarchy') && this.report.hierarchyChain) {
+      const items = this.report.hierarchyChain.map(entry => {
+        const indent = '  '.repeat(entry.depth - 1);
+        return new TreeItemNode(
+          `${indent}${entry.selector}`,
+          vscode.TreeItemCollapsibleState.None,
+          `${entry.affectedCount} affected`,
+          new vscode.ThemeIcon('list-tree')
+        );
+      });
       return Promise.resolve(items);
     }
 
     return Promise.resolve([]);
   }
+
+  private buildNodeItems(nodes: import('@impact-guard/engine').ImpactNode[], defaultIcon: vscode.ThemeIcon): TreeItemNode[] {
+    return nodes.map(n => {
+      const riskIcon = getRiskIcon(n.risk);
+      const fileBasename = n.filePath ? path.basename(n.filePath) : '';
+      
+      // Determine location for highlight command
+      let highlightCmd: vscode.Command | undefined;
+      if (n.filePath) {
+        // Try to find the symbol location in the indexer
+        const fileIndex = indexer.files[n.filePath];
+        if (fileIndex) {
+          const sym = fileIndex.symbols.find(s => s.id === n.symbolId || s.name === n.name);
+          if (sym) {
+            highlightCmd = {
+              title: 'Open & Highlight',
+              command: 'impact-guard.openAndHighlight',
+              arguments: [n.filePath, sym.location.startLine, sym.location.startCol, sym.location.endLine, sym.location.endCol]
+            };
+          }
+        }
+        if (!highlightCmd) {
+          highlightCmd = {
+            title: 'Open & Highlight',
+            command: 'impact-guard.openAndHighlight',
+            arguments: [n.filePath, 1, 1, 1, 1]
+          };
+        }
+      }
+
+      return new TreeItemNode(
+        n.name,
+        vscode.TreeItemCollapsibleState.None,
+        fileBasename,
+        riskIcon,
+        highlightCmd
+      );
+    });
+  }
 }
+
+// ─── CodeLens Provider ────────────────────────────────────────────
 
 class ImpactCodeLensProvider implements vscode.CodeLensProvider {
   provideCodeLenses(document: vscode.TextDocument, token: vscode.CancellationToken): vscode.ProviderResult<vscode.CodeLens[]> {
@@ -464,23 +745,57 @@ class ImpactCodeLensProvider implements vscode.CodeLensProvider {
     if (!fileIndex) return [];
 
     const lenses: vscode.CodeLens[] = [];
+    const processedLines = new Set<number>(); // Avoid duplicate CodeLens on same line
+
     for (const sym of fileIndex.symbols) {
       if (['component', 'service', 'module', 'css-selector', 'input', 'output'].includes(sym.type)) {
+        // Skip duplicate lenses on same line
+        if (processedLines.has(sym.location.startLine)) continue;
+        processedLines.add(sym.location.startLine);
+
         const start = new vscode.Position(sym.location.startLine - 1, sym.location.startCol - 1);
         const end = new vscode.Position(sym.location.endLine - 1, sym.location.endCol - 1);
         const range = new vscode.Range(start, end);
         
-        const downstream = graph.getDownstream(sym.id);
+        // Use hierarchical downstream for CSS selectors
+        const isCSS = sym.id.startsWith('css:');
+        const downstream = isCSS
+          ? graph.getHierarchicalDownstream(sym.id)
+          : graph.getDownstream(sym.id);
+        
         const downCount = downstream.length;
         const risk = RiskEngine.calculateRisk(downCount, sym.type);
 
-        let emoji = '🟢';
-        if (risk === 'critical') emoji = '🔴';
-        else if (risk === 'high') emoji = '🟠';
-        else if (risk === 'medium') emoji = '🟡';
+        // Compute grouped counts for professional display
+        let pageCount = 0;
+        let componentCount = 0;
+        let otherCount = 0;
+        for (const id of downstream) {
+          const node = graph.nodes.get(id);
+          if (node) {
+            if (node.type === 'html-page' || node.type === 'jsp-page') pageCount++;
+            else if (node.type === 'component') componentCount++;
+            else otherCount++;
+          }
+        }
+
+        // Build professional label with ThemeIcon-style prefix
+        let riskIndicator = '$(pass)';
+        if (risk === 'critical') riskIndicator = '$(error)';
+        else if (risk === 'high') riskIndicator = '$(warning)';
+        else if (risk === 'medium') riskIndicator = '$(info)';
+
+        // Build count parts
+        const countParts: string[] = [];
+        if (pageCount > 0) countParts.push(`${pageCount} page${pageCount > 1 ? 's' : ''}`);
+        if (componentCount > 0) countParts.push(`${componentCount} component${componentCount > 1 ? 's' : ''}`);
+        if (otherCount > 0) countParts.push(`${otherCount} other${otherCount > 1 ? 's' : ''}`);
+        
+        const countStr = countParts.length > 0 ? countParts.join(' · ') : 'No impact';
+        const title = `$(shield) Impact: ${countStr}  ${riskIndicator} ${getRiskLabel(risk)}`;
 
         const lens = new vscode.CodeLens(range, {
-          title: `🛡️ Impact: ${downCount} downstream usages | ${emoji} ${risk.toUpperCase()} Risk`,
+          title,
           command: 'impact-guard.analyzeSymbol',
           arguments: [sym.id]
         });
@@ -491,6 +806,8 @@ class ImpactCodeLensProvider implements vscode.CodeLensProvider {
   }
 }
 
+// ─── Hover Provider ───────────────────────────────────────────────
+
 class ImpactHoverProvider implements vscode.HoverProvider {
   provideHover(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): vscode.ProviderResult<vscode.Hover> {
     if (!indexer || !impactEngine) return null;
@@ -499,47 +816,111 @@ class ImpactHoverProvider implements vscode.HoverProvider {
     const symbol = impactEngine.findSymbolAtLine(document.fileName, line);
     if (!symbol) return null;
 
-    const downstream = graph.getDownstream(symbol.id);
+    // Get all symbols on this line for hierarchy context
+    const allSymbolsAtLine = impactEngine.findAllSymbolsAtLine(document.fileName, line);
+
+    // Compute impact using hierarchical analysis
+    const isCSS = symbol.id.startsWith('css:');
+    const downstream = isCSS
+      ? graph.getHierarchicalDownstream(symbol.id)
+      : graph.getDownstream(symbol.id);
     const downCount = downstream.length;
     const risk = RiskEngine.calculateRisk(downCount, symbol.type);
+    const report = impactEngine.analyzeImpact(symbol.id);
 
     const markdown = new vscode.MarkdownString();
     markdown.isTrusted = true;
+    markdown.supportThemeIcons = true;
     
-    let emoji = '🟢';
-    if (risk === 'critical') emoji = '🔴';
-    else if (risk === 'high') emoji = '🟠';
-    else if (risk === 'medium') emoji = '🟡';
+    // ─── Header ───
+    markdown.appendMarkdown(`### $(shield) Impact Guard — Analysis\n\n`);
+    
+    // ─── Trigger Info ───
+    markdown.appendMarkdown(`$(symbol-property) **Trigger:** \`${symbol.name}\` _(${symbol.type})_\n\n`);
 
-    markdown.appendMarkdown(`### $(shield) Impact Guard Summary\n\n`);
-    markdown.appendMarkdown(`- **Symbol Name:** \`${symbol.name}\` (${symbol.type})\n`);
-    markdown.appendMarkdown(`- **Usage Count:** ${downCount} downstream files/nodes affected\n`);
-    markdown.appendMarkdown(`- **Risk Level:** **${emoji} ${risk.toUpperCase()}**\n\n`);
+    // ─── Hierarchy Chain (for CSS selectors) ───
+    if (isCSS && report.hierarchyChain && report.hierarchyChain.length > 0) {
+      markdown.appendMarkdown(`---\n\n`);
+      markdown.appendMarkdown(`$(list-tree) **Selector Hierarchy:**\n\n`);
+      
+      // Show current selector as root
+      markdown.appendMarkdown(`\`${symbol.name}\`\n\n`);
+      
+      for (const entry of report.hierarchyChain) {
+        const indent = '&nbsp;&nbsp;'.repeat(entry.depth);
+        markdown.appendMarkdown(`${indent}$(arrow-right) \`${entry.selector}\` _(${entry.affectedCount} affected)_\n\n`);
+      }
+    }
+
+    // ─── Grouped Impact Counts ───
+    markdown.appendMarkdown(`---\n\n`);
+    markdown.appendMarkdown(`$(graph) **Impact Summary:**\n\n`);
+
+    if (report.groupedCounts) {
+      const c = report.groupedCounts;
+      if (c.pages > 0) {
+        markdown.appendMarkdown(`$(globe) **Pages:** ${c.pages}\n\n`);
+      }
+      if (c.components > 0) {
+        markdown.appendMarkdown(`$(symbol-class) **Components:** ${c.components}\n\n`);
+      }
+      if (c.modules > 0) {
+        markdown.appendMarkdown(`$(package) **Modules:** ${c.modules}\n\n`);
+      }
+      if (c.routes > 0) {
+        markdown.appendMarkdown(`$(symbol-interface) **Routes:** ${c.routes}\n\n`);
+      }
+      if (c.selectors > 0) {
+        markdown.appendMarkdown(`$(symbol-color) **Selectors:** ${c.selectors}\n\n`);
+      }
+      if (c.pages === 0 && c.components === 0 && c.modules === 0 && c.routes === 0 && c.selectors === 0) {
+        markdown.appendMarkdown(`_No downstream impacts detected._\n\n`);
+      }
+    } else {
+      markdown.appendMarkdown(`Total affected: ${downCount}\n\n`);
+    }
+
+    // ─── Risk Level ───
+    let riskIcon = '$(pass)';
+    if (risk === 'critical') riskIcon = '$(error)';
+    else if (risk === 'high') riskIcon = '$(warning)';
+    else if (risk === 'medium') riskIcon = '$(info)';
     
+    markdown.appendMarkdown(`---\n\n`);
+    markdown.appendMarkdown(`${riskIcon} **Risk Level:** **${getRiskLabel(risk)}**\n\n`);
+
+    // ─── Top Affected Items Preview ───
     if (downCount > 0) {
-      markdown.appendMarkdown(`**Affected Items:**\n`);
-      for (const id of downstream.slice(0, 5)) {
-        const node = graph.nodes.get(id);
-        if (node) {
-          markdown.appendMarkdown(`- \`${node.name}\` (${node.type})\n`);
+      const pages = report.affectedNodes.filter(n => n.type === 'html-page' || n.type === 'jsp-page');
+      const components = report.affectedNodes.filter(n => n.type === 'component');
+      const previewItems = [...pages, ...components].slice(0, 4);
+      
+      if (previewItems.length > 0) {
+        markdown.appendMarkdown(`**Top Affected:**\n\n`);
+        for (const item of previewItems) {
+          const icon = item.type === 'html-page' || item.type === 'jsp-page' ? '$(globe)' : '$(symbol-class)';
+          markdown.appendMarkdown(`${icon} \`${item.name}\`\n\n`);
         }
       }
-      
+
+      // ─── Show in Sidebar Link ───
       const argsStr = encodeURIComponent(JSON.stringify([symbol.id]));
-      if (downCount > 5) {
-        markdown.appendMarkdown(`\n👉 **[Show all ${downCount} affected items in Sidebar...](command:impact-guard.analyzeSymbol?${argsStr})**\n`);
-      } else {
-        markdown.appendMarkdown(`\n👉 **[Reveal impact path in Sidebar...](command:impact-guard.analyzeSymbol?${argsStr})**\n`);
-      }
+      markdown.appendMarkdown(`---\n\n`);
+      markdown.appendMarkdown(`$(link-external) **[Show full impact in Sidebar...](command:impact-guard.analyzeSymbol?${argsStr})**\n`);
     }
     
     return new vscode.Hover(markdown);
   }
 }
 
+// ─── Utility Functions ────────────────────────────────────────────
+
 export function deactivate() {
   if (statusBarItem) {
     statusBarItem.dispose();
+  }
+  if (highlightClearTimeout) {
+    clearTimeout(highlightClearTimeout);
   }
 }
 
@@ -559,6 +940,26 @@ async function findWorkspaceFiles(): Promise<string[]> {
 
   const uris = await vscode.workspace.findFiles(
     '**/*.{ts,html,css,scss,less,jsp}',
+    excludeGlob
+  );
+  return uris.map(uri => uri.fsPath);
+}
+
+async function findWorkspaceStyleFiles(): Promise<string[]> {
+  const config = vscode.workspace.getConfiguration('impactGuard');
+  const extraExcludes = config.get<string[]>('exclude') || [];
+  
+  let excludeGlob = '**/node_modules/**';
+  if (extraExcludes.length > 0) {
+    const formattedExcludes = extraExcludes.map(p => {
+      let cleaned = p.trim().replace(/^\/|\\/, '').replace(/\/|\\$/, '');
+      return `**/${cleaned}/**`;
+    });
+    excludeGlob = `{**/node_modules/**,${formattedExcludes.join(',')}}`;
+  }
+
+  const uris = await vscode.workspace.findFiles(
+    '**/*.{css,scss,less}',
     excludeGlob
   );
   return uris.map(uri => uri.fsPath);

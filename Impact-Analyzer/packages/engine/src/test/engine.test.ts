@@ -1,9 +1,11 @@
 import { parseTypeScript } from '../parser/ts-parser.js';
 import { parseHTML } from '../parser/html-parser.js';
 import { parseCSS } from '../parser/css-parser.js';
+import { ImportResolver } from '../parser/import-resolver.js';
 import { WorkspaceIndexer } from '../indexer/workspace-indexer.js';
 import { DependencyGraph } from '../graph/dependency-graph.js';
 import { RiskEngine } from '../risk/risk-engine.js';
+import { ImpactEngine } from '../impact/impact-engine.js';
 import * as path from 'path';
 
 describe('Impact Guard Core Engine Tests', () => {
@@ -181,6 +183,52 @@ describe('Impact Guard Core Engine Tests', () => {
       expect(activeItemSyms.length).toBeGreaterThan(0);
       expect(activeItemSyms.some(s => s.location.startLine === 9)).toBe(true);
     });
+
+    it('should include hierarchy metadata on nested selectors', () => {
+      const style = `
+        .parent {
+          color: red;
+          .child {
+            color: blue;
+            .grandchild {
+              color: green;
+            }
+          }
+        }
+      `;
+      const { symbols } = parseCSS('test.less', style);
+
+      // Check compound selectors have ancestorClasses metadata
+      const parentChild = symbols.find(s => s.id === 'css:.parent .child');
+      expect(parentChild).toBeDefined();
+      expect(parentChild?.metadata?.ancestorClasses).toContain('.parent');
+      expect(parentChild?.metadata?.ancestorClasses).toContain('.child');
+
+      const parentChildGrandchild = symbols.find(s => s.id === 'css:.parent .child .grandchild');
+      expect(parentChildGrandchild).toBeDefined();
+      expect(parentChildGrandchild?.metadata?.ancestorClasses).toContain('.parent');
+      expect(parentChildGrandchild?.metadata?.ancestorClasses).toContain('.child');
+      expect(parentChildGrandchild?.metadata?.ancestorClasses).toContain('.grandchild');
+    });
+
+    it('should extract @import paths from LESS content', () => {
+      const style = `
+        @import "bootstrap/less/variables.less";
+        @import "common/custom-variables.less";
+        @import (less) '../webapp/js/thirdparty/codemirror/lib/codemirror.css';
+        @import 'ctf-common';
+
+        .my-class {
+          color: red;
+        }
+      `;
+      const { imports } = parseCSS('test.less', style);
+
+      expect(imports).toContain('bootstrap/less/variables.less');
+      expect(imports).toContain('common/custom-variables.less');
+      expect(imports).toContain('../webapp/js/thirdparty/codemirror/lib/codemirror.css');
+      expect(imports).toContain('ctf-common');
+    });
   });
 
   describe('Dependency Graph & Risk Calculations', () => {
@@ -219,6 +267,193 @@ describe('Impact Guard Core Engine Tests', () => {
 
       const risk = RiskEngine.calculateRisk(downstream.length, 'css-selector');
       expect(risk).toBe('medium');
+    });
+  });
+
+  describe('CSS Hierarchy Impact Propagation', () => {
+    it('should propagate parent class changes to pages using child/grandchild selectors', () => {
+      const workspaceRoot = path.resolve(__dirname);
+      const indexer = new WorkspaceIndexer(workspaceRoot);
+      const styleLessFile = path.join(workspaceRoot, 'styles.less');
+      const loginJspFile = path.join(workspaceRoot, 'login.jsp');
+      const dashboardHtmlFile = path.join(workspaceRoot, 'dashboard.html');
+
+      // Style file with nested classes: .parent > .child > .grandchild
+      indexer.files[styleLessFile] = {
+        filePath: styleLessFile,
+        lastModified: 100,
+        symbols: [
+          { id: 'css:.parent', name: '.parent', type: 'css-selector', location: { filePath: styleLessFile, startLine: 1, startCol: 1, endLine: 10, endCol: 1 } },
+          { id: 'css:.parent .child', name: '.parent .child', type: 'css-selector', location: { filePath: styleLessFile, startLine: 3, startCol: 1, endLine: 8, endCol: 1 }, metadata: { ancestorClasses: ['.parent', '.child'] } },
+          { id: 'css:.child', name: '.child', type: 'css-selector', location: { filePath: styleLessFile, startLine: 3, startCol: 1, endLine: 8, endCol: 1 }, metadata: { compoundSelector: '.parent .child', ancestorClasses: ['.parent', '.child'] } },
+          { id: 'css:.parent .child .grandchild', name: '.parent .child .grandchild', type: 'css-selector', location: { filePath: styleLessFile, startLine: 5, startCol: 1, endLine: 7, endCol: 1 }, metadata: { ancestorClasses: ['.parent', '.child', '.grandchild'] } },
+          { id: 'css:.grandchild', name: '.grandchild', type: 'css-selector', location: { filePath: styleLessFile, startLine: 5, startCol: 1, endLine: 7, endCol: 1 }, metadata: { compoundSelector: '.parent .child .grandchild', ancestorClasses: ['.parent', '.child', '.grandchild'] } }
+        ],
+        references: []
+      };
+
+      // JSP page uses .parent .child .grandchild
+      indexer.files[loginJspFile] = {
+        filePath: loginJspFile,
+        lastModified: 100,
+        symbols: [],
+        references: [
+          { targetSymbolId: 'css:.grandchild', location: { filePath: loginJspFile, startLine: 5, startCol: 1, endLine: 5, endCol: 20 } }
+        ]
+      };
+
+      // HTML page uses .parent directly
+      indexer.files[dashboardHtmlFile] = {
+        filePath: dashboardHtmlFile,
+        lastModified: 100,
+        symbols: [],
+        references: [
+          { targetSymbolId: 'css:.parent', location: { filePath: dashboardHtmlFile, startLine: 3, startCol: 1, endLine: 3, endCol: 15 } }
+        ]
+      };
+
+      const graph = new DependencyGraph();
+      graph.buildGraph(indexer);
+
+      // Scenario 1: Analyzing .parent should include pages using .child and .grandchild too
+      const parentDownstream = graph.getHierarchicalDownstream('css:.parent');
+      const relLoginPath = path.relative(workspaceRoot, loginJspFile).replace(/\\/g, '/');
+      const relDashboardPath = path.relative(workspaceRoot, dashboardHtmlFile).replace(/\\/g, '/');
+      
+      expect(parentDownstream).toContain(`page:${relDashboardPath}`);
+      expect(parentDownstream).toContain(`page:${relLoginPath}`);
+
+      // Scenario 2: Analyzing .child should include the login page (uses .grandchild under .child)
+      const childDownstream = graph.getHierarchicalDownstream('css:.child');
+      expect(childDownstream).toContain(`page:${relLoginPath}`);
+    });
+
+    it('should produce correct grouped counts for parent with nested children', () => {
+      const workspaceRoot = path.resolve(__dirname);
+      const indexer = new WorkspaceIndexer(workspaceRoot);
+      const graph = new DependencyGraph();
+      const styleLessFile = path.join(workspaceRoot, 'app.less');
+      const page1 = path.join(workspaceRoot, 'page1.jsp');
+      const page2 = path.join(workspaceRoot, 'page2.html');
+      const page3 = path.join(workspaceRoot, 'page3.jsp');
+
+      indexer.files[styleLessFile] = {
+        filePath: styleLessFile,
+        lastModified: 100,
+        symbols: [
+          { id: 'css:.baseline', name: '.baseline', type: 'css-selector', location: { filePath: styleLessFile, startLine: 1, startCol: 1, endLine: 20, endCol: 1 } },
+          { id: 'css:.baseline .header', name: '.baseline .header', type: 'css-selector', location: { filePath: styleLessFile, startLine: 3, startCol: 1, endLine: 10, endCol: 1 } },
+          { id: 'css:.header', name: '.header', type: 'css-selector', location: { filePath: styleLessFile, startLine: 3, startCol: 1, endLine: 10, endCol: 1 } },
+          { id: 'css:.baseline .table-wrapper', name: '.baseline .table-wrapper', type: 'css-selector', location: { filePath: styleLessFile, startLine: 12, startCol: 1, endLine: 18, endCol: 1 } },
+          { id: 'css:.table-wrapper', name: '.table-wrapper', type: 'css-selector', location: { filePath: styleLessFile, startLine: 12, startCol: 1, endLine: 18, endCol: 1 } }
+        ],
+        references: []
+      };
+
+      indexer.files[page1] = {
+        filePath: page1,
+        lastModified: 100,
+        symbols: [],
+        references: [
+          { targetSymbolId: 'css:.baseline', location: { filePath: page1, startLine: 1, startCol: 1, endLine: 1, endCol: 10 } }
+        ]
+      };
+
+      indexer.files[page2] = {
+        filePath: page2,
+        lastModified: 100,
+        symbols: [],
+        references: [
+          { targetSymbolId: 'css:.header', location: { filePath: page2, startLine: 1, startCol: 1, endLine: 1, endCol: 10 } }
+        ]
+      };
+
+      indexer.files[page3] = {
+        filePath: page3,
+        lastModified: 100,
+        symbols: [],
+        references: [
+          { targetSymbolId: 'css:.table-wrapper', location: { filePath: page3, startLine: 1, startCol: 1, endLine: 1, endCol: 10 } }
+        ]
+      };
+
+      graph.buildGraph(indexer);
+      const impactEngine = new ImpactEngine(indexer, graph);
+      const report = impactEngine.analyzeImpact('css:.baseline');
+
+      // All 3 pages should be affected when analyzing .baseline
+      expect(report.groupedCounts).toBeDefined();
+      expect(report.groupedCounts!.pages).toBeGreaterThanOrEqual(3);
+    });
+
+    it('should build hierarchy chain for hover display', () => {
+      const workspaceRoot = path.resolve(__dirname);
+      const indexer = new WorkspaceIndexer(workspaceRoot);
+      const graph = new DependencyGraph();
+      const styleFile = path.join(workspaceRoot, 'test.less');
+
+      indexer.files[styleFile] = {
+        filePath: styleFile,
+        lastModified: 100,
+        symbols: [
+          { id: 'css:.ctf_7_x_styles', name: '.ctf_7_x_styles', type: 'css-selector', location: { filePath: styleFile, startLine: 1, startCol: 1, endLine: 50, endCol: 1 } },
+          { id: 'css:.ctf_7_x_styles .baseline', name: '.ctf_7_x_styles .baseline', type: 'css-selector', location: { filePath: styleFile, startLine: 5, startCol: 1, endLine: 30, endCol: 1 } },
+          { id: 'css:.baseline', name: '.baseline', type: 'css-selector', location: { filePath: styleFile, startLine: 5, startCol: 1, endLine: 30, endCol: 1 } },
+          { id: 'css:.ctf_7_x_styles .baseline .header', name: '.ctf_7_x_styles .baseline .header', type: 'css-selector', location: { filePath: styleFile, startLine: 8, startCol: 1, endLine: 15, endCol: 1 } },
+          { id: 'css:.header', name: '.header', type: 'css-selector', location: { filePath: styleFile, startLine: 8, startCol: 1, endLine: 15, endCol: 1 } }
+        ],
+        references: []
+      };
+
+      graph.buildGraph(indexer);
+
+      // Hierarchy chain for .ctf_7_x_styles should include nested selectors
+      const chain = graph.getHierarchyChain('css:.ctf_7_x_styles');
+      expect(chain.length).toBeGreaterThan(0);
+      expect(chain.some(c => c.selector.includes('.baseline'))).toBe(true);
+    });
+  });
+
+  describe('Import Chain Resolution', () => {
+    it('should extract import paths from LESS content', () => {
+      const resolver = new ImportResolver(__dirname);
+      
+      const imports = resolver.extractImports(`
+        @import "bootstrap/less/variables.less";
+        @import "common/custom-variables.less";
+        @import (less) '../webapp/js/thirdparty/codemirror/lib/codemirror.css';
+        @import 'ctf-common';
+      `);
+
+      expect(imports).toContain('bootstrap/less/variables.less');
+      expect(imports).toContain('common/custom-variables.less');
+      expect(imports).toContain('../webapp/js/thirdparty/codemirror/lib/codemirror.css');
+      expect(imports).toContain('ctf-common');
+    });
+
+    it('should extract import paths from CSS content with url() syntax', () => {
+      const resolver = new ImportResolver(__dirname);
+      
+      const imports = resolver.extractImports(`
+        @import url('reset.css');
+        @import url("theme.css");
+        body { color: red; }
+      `);
+
+      expect(imports).toContain('reset.css');
+      expect(imports).toContain('theme.css');
+    });
+
+    it('should not extract imports from inside comments', () => {
+      const resolver = new ImportResolver(__dirname);
+      
+      const imports = resolver.extractImports(`
+        /* @import "commented-out.less"; */
+        @import "real-import.less";
+      `);
+
+      expect(imports).not.toContain('commented-out.less');
+      expect(imports).toContain('real-import.less');
     });
   });
 
@@ -400,6 +635,101 @@ describe('Impact Guard Core Engine Tests', () => {
       const { references } = parseHTML('dropdown.html', html);
       expect(references.some(r => r.targetSymbolId === 'css:.btn-primary')).toBe(true);
       expect(references.some(r => r.targetSymbolId === 'css:.show')).toBe(true);
+    });
+  });
+
+  describe('Enterprise LESS Structure (Digital.ai Reference)', () => {
+    it('should parse nested classes inside a root wrapper class like .ctf_7_x_styles', () => {
+      const style = `
+        .ctf_7_x_styles {
+          .baseline {
+            width: 100%;
+            .header {
+              display: flex;
+              .btn {
+                margin-left: 16px;
+              }
+            }
+            .table-wrapper {
+              padding-left: 20px;
+            }
+          }
+        }
+      `;
+      const { symbols } = parseCSS('ctf-stylesheet.less', style);
+
+      // Root class
+      expect(symbols.some(s => s.id === 'css:.ctf_7_x_styles')).toBe(true);
+      
+      // Nested classes should have full compound selectors
+      expect(symbols.some(s => s.id === 'css:.ctf_7_x_styles .baseline')).toBe(true);
+      expect(symbols.some(s => s.id === 'css:.ctf_7_x_styles .baseline .header')).toBe(true);
+      expect(symbols.some(s => s.id === 'css:.ctf_7_x_styles .baseline .header .btn')).toBe(true);
+      expect(symbols.some(s => s.id === 'css:.ctf_7_x_styles .baseline .table-wrapper')).toBe(true);
+      
+      // Bare class names should also exist
+      expect(symbols.some(s => s.id === 'css:.baseline')).toBe(true);
+      expect(symbols.some(s => s.id === 'css:.header')).toBe(true);
+      expect(symbols.some(s => s.id === 'css:.btn')).toBe(true);
+      expect(symbols.some(s => s.id === 'css:.table-wrapper')).toBe(true);
+    });
+
+    it('should correctly propagate impact through deeply nested enterprise LESS hierarchy', () => {
+      const workspaceRoot = path.resolve(__dirname);
+      const indexer = new WorkspaceIndexer(workspaceRoot);
+      const graph = new DependencyGraph();
+      const styleFile = path.join(workspaceRoot, 'ctf.less');
+      const page1 = path.join(workspaceRoot, 'artifact-view.jsp');
+      const page2 = path.join(workspaceRoot, 'baseline-view.html');
+
+      indexer.files[styleFile] = {
+        filePath: styleFile,
+        lastModified: 100,
+        symbols: [
+          { id: 'css:.ctf_7_x_styles', name: '.ctf_7_x_styles', type: 'css-selector', location: { filePath: styleFile, startLine: 1, startCol: 1, endLine: 100, endCol: 1 } },
+          { id: 'css:.ctf_7_x_styles .baseline', name: '.ctf_7_x_styles .baseline', type: 'css-selector', location: { filePath: styleFile, startLine: 5, startCol: 1, endLine: 50, endCol: 1 } },
+          { id: 'css:.baseline', name: '.baseline', type: 'css-selector', location: { filePath: styleFile, startLine: 5, startCol: 1, endLine: 50, endCol: 1 } },
+          { id: 'css:.ctf_7_x_styles .baseline .header', name: '.ctf_7_x_styles .baseline .header', type: 'css-selector', location: { filePath: styleFile, startLine: 10, startCol: 1, endLine: 25, endCol: 1 } },
+          { id: 'css:.header', name: '.header', type: 'css-selector', location: { filePath: styleFile, startLine: 10, startCol: 1, endLine: 25, endCol: 1 } }
+        ],
+        references: []
+      };
+
+      // Page uses .header class (which is nested under .ctf_7_x_styles .baseline .header)
+      indexer.files[page1] = {
+        filePath: page1,
+        lastModified: 100,
+        symbols: [],
+        references: [
+          { targetSymbolId: 'css:.header', location: { filePath: page1, startLine: 5, startCol: 1, endLine: 5, endCol: 15 } }
+        ]
+      };
+
+      // Page uses .baseline class
+      indexer.files[page2] = {
+        filePath: page2,
+        lastModified: 100,
+        symbols: [],
+        references: [
+          { targetSymbolId: 'css:.baseline', location: { filePath: page2, startLine: 3, startCol: 1, endLine: 3, endCol: 15 } }
+        ]
+      };
+
+      graph.buildGraph(indexer);
+      const impactEngine = new ImpactEngine(indexer, graph);
+
+      // Analyzing .ctf_7_x_styles should find BOTH pages
+      const report = impactEngine.analyzeImpact('css:.ctf_7_x_styles');
+      const relPage1 = path.relative(workspaceRoot, page1).replace(/\\/g, '/');
+      const relPage2 = path.relative(workspaceRoot, page2).replace(/\\/g, '/');
+      
+      const affectedPageIds = report.affectedNodes
+        .filter(n => n.type === 'html-page' || n.type === 'jsp-page')
+        .map(n => n.symbolId);
+
+      expect(affectedPageIds).toContain(`page:${relPage1}`);
+      expect(affectedPageIds).toContain(`page:${relPage2}`);
+      expect(report.groupedCounts!.pages).toBe(2);
     });
   });
 });

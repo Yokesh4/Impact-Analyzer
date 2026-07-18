@@ -1,12 +1,39 @@
 import { WorkspaceSymbol, WorkspaceReference, SourceLocation } from '../types.js';
 
-export function parseCSS(filePath: string, content: string): { symbols: WorkspaceSymbol[]; references: WorkspaceReference[] } {
+export interface CSSParseResult {
+  symbols: WorkspaceSymbol[];
+  references: WorkspaceReference[];
+  imports: string[];
+}
+
+export function parseCSS(filePath: string, content: string): CSSParseResult {
+  const rawContent = content;
   // Replace single-line and multi-line comments with spaces to preserve line and column offsets
   content = content.replace(/\/\*[\s\S]*?\*\//g, match => match.replace(/[^\r\n]/g, ' '));
   content = content.replace(/\/\/.*/g, match => match.replace(/[^\r\n]/g, ' '));
 
   const symbols: WorkspaceSymbol[] = [];
   const references: WorkspaceReference[] = [];
+  const imports: string[] = [];
+
+  // Extract @import paths from raw content (before comment stripping)
+  const importWithOptionsRegex = /@import\s*\([^)]*\)\s*['"]([^'"]+)['"]\s*;?/g;
+  const importSimpleRegex = /@import\s+['"]([^'"]+)['"]\s*;?/g;
+  const importUrlRegex = /@import\s+url\(\s*['"]([^'"]+)['"]\s*\)\s*;?/g;
+  let importMatch: RegExpExecArray | null;
+
+  while ((importMatch = importWithOptionsRegex.exec(rawContent)) !== null) {
+    imports.push(importMatch[1]);
+  }
+  while ((importMatch = importSimpleRegex.exec(rawContent)) !== null) {
+    const precedingText = rawContent.substring(Math.max(0, importMatch.index - 20), importMatch.index);
+    if (!/\)\s*$/.test(precedingText)) {
+      imports.push(importMatch[1]);
+    }
+  }
+  while ((importMatch = importUrlRegex.exec(rawContent)) !== null) {
+    imports.push(importMatch[1]);
+  }
 
   let currentOffset = 0;
   let currentLine = 1;
@@ -33,7 +60,7 @@ export function parseCSS(filePath: string, content: string): { symbols: Workspac
 
   let index = 0;
   const length = content.length;
-  const selectorStack: { raw: string; resolved: string; start: number; symbolsCreated: WorkspaceSymbol[] }[] = [];
+  const selectorStack: { raw: string; resolved: string; start: number; symbolsCreated: WorkspaceSymbol[]; parentResolved: string }[] = [];
 
   while (index < length) {
     const char = content[index];
@@ -178,7 +205,7 @@ export function parseCSS(filePath: string, content: string): { symbols: Workspac
         .trim();
 
       if (rawSelector.startsWith('@media') || rawSelector.startsWith('@keyframes') || rawSelector.startsWith('@supports')) {
-        selectorStack.push({ raw: rawSelector, resolved: '', start: index, symbolsCreated: [] });
+        selectorStack.push({ raw: rawSelector, resolved: '', start: index, symbolsCreated: [], parentResolved: '' });
         index++;
         continue;
       }
@@ -195,7 +222,7 @@ export function parseCSS(filePath: string, content: string): { symbols: Workspac
         resolved = rawSelector;
       }
 
-      const stackEntry = { raw: rawSelector, resolved, start: index, symbolsCreated: [] as WorkspaceSymbol[] };
+      const stackEntry = { raw: rawSelector, resolved, start: index, symbolsCreated: [] as WorkspaceSymbol[], parentResolved: parent };
       selectorStack.push(stackEntry);
 
       if (resolved) {
@@ -204,6 +231,15 @@ export function parseCSS(filePath: string, content: string): { symbols: Workspac
           sel = sel.trim();
           if (sel) {
             const fullStartLoc = getLineCol(index - rawSelector.length);
+
+            // Build ancestor class list for hierarchy tracking
+            const ancestorClasses: string[] = [];
+            const classExtract = /\.([a-zA-Z0-9_-]+)/g;
+            let cMatch: RegExpExecArray | null;
+            while ((cMatch = classExtract.exec(sel)) !== null) {
+              ancestorClasses.push(`.${cMatch[1]}`);
+            }
+
             const selectorSymbol: WorkspaceSymbol = {
               id: `css:${sel}`,
               name: sel,
@@ -214,6 +250,11 @@ export function parseCSS(filePath: string, content: string): { symbols: Workspac
                 startCol: fullStartLoc.col,
                 endLine: fullStartLoc.line,
                 endCol: fullStartLoc.col + rawSelector.length
+              },
+              metadata: {
+                parentSelector: parent || null,
+                ancestorClasses,
+                rawSelector: rawSelector
               }
             };
             symbols.push(selectorSymbol);
@@ -234,6 +275,11 @@ export function parseCSS(filePath: string, content: string): { symbols: Workspac
                   startCol: startLoc.col,
                   endLine: startLoc.line,
                   endCol: startLoc.col + classMatch[0].length
+                },
+                metadata: {
+                  parentSelector: parent || null,
+                  compoundSelector: sel,
+                  ancestorClasses
                 }
               };
               symbols.push(classSymbol);
@@ -263,6 +309,6 @@ export function parseCSS(filePath: string, content: string): { symbols: Workspac
     index++;
   }
 
-  return { symbols, references };
+  return { symbols, references, imports: [...new Set(imports)] };
 }
 export default parseCSS;

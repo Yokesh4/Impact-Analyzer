@@ -7,10 +7,14 @@ export class DependencyGraph {
   public edges: Map<string, Set<string>> = new Map(); // from -> Set<to>
   public incomingEdges: Map<string, Set<string>> = new Map(); // to -> Set<from>
 
+  /** Maps a bare class (e.g. "css:.parent") to all compound selectors containing it */
+  public classToCompoundSelectors: Map<string, Set<string>> = new Map();
+
   public clear(): void {
     this.nodes.clear();
     this.edges.clear();
     this.incomingEdges.clear();
+    this.classToCompoundSelectors.clear();
   }
 
   public addNode(node: DependencyNode): void {
@@ -53,6 +57,98 @@ export class DependencyGraph {
     return results;
   }
 
+  /**
+   * Get hierarchical downstream for a CSS class.
+   * When analyzing .parent, also includes downstream of all compound selectors
+   * that contain .parent (e.g., ".parent .child", ".parent .child .grandchild"),
+   * AND all bare class names extracted from those compound selectors.
+   * This provides accurate affected page counts across the entire nesting hierarchy.
+   */
+  public getHierarchicalDownstream(nodeId: string): string[] {
+    const allDownstream = new Set<string>();
+    
+    // Get direct downstream of this node
+    const directDownstream = this.getDownstream(nodeId);
+    for (const id of directDownstream) {
+      allDownstream.add(id);
+    }
+
+    // If this is a CSS class, also get downstream of all compound selectors containing it
+    // AND all bare class names that appear in those compound selectors
+    if (nodeId.startsWith('css:')) {
+      const visited = new Set<string>();
+      visited.add(nodeId);
+      const queue = [nodeId];
+
+      while (queue.length > 0) {
+        const current = queue.shift()!;
+
+        // Get compound selectors containing this class
+        const compoundSelectors = this.classToCompoundSelectors.get(current);
+        if (compoundSelectors) {
+          for (const compoundId of compoundSelectors) {
+            if (!visited.has(compoundId)) {
+              visited.add(compoundId);
+              // Get downstream of compound selector
+              const compoundDownstream = this.getDownstream(compoundId);
+              for (const id of compoundDownstream) {
+                allDownstream.add(id);
+              }
+
+              // Extract bare class names from the compound selector and process them too
+              const selectorText = compoundId.replace('css:', '');
+              const classRegex = /\.([a-zA-Z0-9_-]+)/g;
+              let match: RegExpExecArray | null;
+              while ((match = classRegex.exec(selectorText)) !== null) {
+                const bareClassId = `css:.${match[1]}`;
+                if (!visited.has(bareClassId)) {
+                  visited.add(bareClassId);
+                  queue.push(bareClassId);
+                  // Also get direct downstream of this bare class (connects to pages)
+                  const bareDownstream = this.getDownstream(bareClassId);
+                  for (const id of bareDownstream) {
+                    allDownstream.add(id);
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Remove self
+    allDownstream.delete(nodeId);
+    return Array.from(allDownstream);
+  }
+
+  /**
+   * Get all compound selectors that a bare class participates in,
+   * organized as a hierarchy chain for hover display.
+   */
+  public getHierarchyChain(classId: string): { selector: string; depth: number; affectedCount: number }[] {
+    const chain: { selector: string; depth: number; affectedCount: number }[] = [];
+    const compoundSelectors = this.classToCompoundSelectors.get(classId);
+    
+    if (!compoundSelectors) return chain;
+    
+    for (const compoundId of compoundSelectors) {
+      if (compoundId === classId) continue;
+      const selector = compoundId.replace('css:', '');
+      const depth = (selector.match(/\./g) || []).length;
+      const downstream = this.getDownstream(compoundId);
+      chain.push({
+        selector,
+        depth,
+        affectedCount: downstream.length
+      });
+    }
+    
+    // Sort by depth (shallowest first)
+    chain.sort((a, b) => a.depth - b.depth);
+    return chain;
+  }
+
   public getDownstreamPath(fromId: string, toId: string): string[] {
     const visited = new Set<string>();
     const parentMap = new Map<string, string>();
@@ -84,6 +180,50 @@ export class DependencyGraph {
       }
     }
     return [];
+  }
+
+  /**
+   * Build CSS hierarchy edges: a change to .parent should propagate to
+   * all compound selectors containing .parent as an ancestor class.
+   * e.g., css:.parent → css:.parent .child → css:.parent .child .grandchild
+   */
+  private buildCSSHierarchyEdges(): void {
+    const compoundSelectors: { id: string; classes: string[] }[] = [];
+
+    for (const [id, node] of this.nodes.entries()) {
+      if (id.startsWith('css:') && node.type === 'css-selector') {
+        const selectorText = id.replace('css:', '');
+        const classes: string[] = [];
+        const classRegex = /\.([a-zA-Z0-9_-]+)/g;
+        let match: RegExpExecArray | null;
+        while ((match = classRegex.exec(selectorText)) !== null) {
+          classes.push(`.${match[1]}`);
+        }
+        if (classes.length > 0) {
+          compoundSelectors.push({ id, classes });
+        }
+      }
+    }
+
+    // For each compound selector, register it under every class it contains
+    for (const { id, classes } of compoundSelectors) {
+      for (const cls of classes) {
+        const classId = `css:${cls}`;
+        if (!this.classToCompoundSelectors.has(classId)) {
+          this.classToCompoundSelectors.set(classId, new Set());
+        }
+        this.classToCompoundSelectors.get(classId)!.add(id);
+      }
+    }
+
+    // Build edges: bare class → compound selector containing it
+    for (const [classId, compounds] of this.classToCompoundSelectors.entries()) {
+      for (const compoundId of compounds) {
+        if (compoundId !== classId && this.nodes.has(classId)) {
+          this.addEdge(classId, compoundId);
+        }
+      }
+    }
   }
 
   public buildGraph(indexer: WorkspaceIndexer): void {
@@ -216,5 +356,8 @@ export class DependencyGraph {
         }
       }
     }
+
+    // Build CSS hierarchy edges for accurate parent→child→grandchild propagation
+    this.buildCSSHierarchyEdges();
   }
 }

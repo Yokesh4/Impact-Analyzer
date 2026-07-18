@@ -2,7 +2,7 @@
   "name": "impact-guard-vscode",
   "displayName": "Impact Guard",
   "description": "Enterprise Line-Level Impact Analyzer for Angular Applications",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "publisher": "antigravity",
   "engines": {
     "vscode": "^1.80.0"
@@ -31,6 +31,21 @@
           },
           "default": [],
           "description": "Additional folders to exclude from indexing (relative to workspace root, e.g. ['src/assets', 'dist-dev'])"
+        },
+        "impactGuard.indexingMode": {
+          "type": "string",
+          "enum": [
+            "prompt",
+            "style-focused",
+            "full"
+          ],
+          "default": "prompt",
+          "enumDescriptions": [
+            "Ask the user to choose the indexing mode on activation",
+            "Index only open style files and their @import chains (fast, recommended for enterprise)",
+            "Index all supported files in the workspace (comprehensive, slower)"
+          ],
+          "description": "Controls how Impact Guard discovers and indexes files. 'prompt' asks on activation, 'style-focused' indexes from open .less/.css/.scss files and their imports, 'full' indexes everything."
         }
       }
     },
@@ -47,7 +62,7 @@
       "impact-guard-container": [
         {
           "id": "impact-guard-view",
-          "name": "Line-Level Impact Analyzer",
+          "name": "Impact Analyzer",
           "type": "tree"
         }
       ]
@@ -55,11 +70,13 @@
     "commands": [
       {
         "command": "impact-guard.analyzeSymbol",
-        "title": "Impact Guard: Analyze Current Symbol"
+        "title": "Impact Guard: Analyze Current Symbol",
+        "icon": "$(search)"
       },
       {
         "command": "impact-guard.analyzeFile",
-        "title": "Impact Guard: Analyze Current File"
+        "title": "Impact Guard: Analyze Current File",
+        "icon": "$(file-code)"
       },
       {
         "command": "impact-guard.analyzeWorkspace",
@@ -67,7 +84,8 @@
       },
       {
         "command": "impact-guard.rebuildIndex",
-        "title": "Impact Guard: Rebuild Index"
+        "title": "Impact Guard: Rebuild Index",
+        "icon": "$(refresh)"
       },
       {
         "command": "impact-guard.showDependencyGraph",
@@ -75,7 +93,21 @@
       },
       {
         "command": "impact-guard.exportReport",
-        "title": "Impact Guard: Export Report"
+        "title": "Impact Guard: Export Report",
+        "icon": "$(export)"
+      },
+      {
+        "command": "impact-guard.openAndHighlight",
+        "title": "Impact Guard: Open File & Highlight"
+      },
+      {
+        "command": "impact-guard.showIndexingLog",
+        "title": "Impact Guard: Show Indexing Log"
+      },
+      {
+        "command": "impact-guard.switchIndexingMode",
+        "title": "Impact Guard: Switch Indexing Mode",
+        "icon": "$(settings-gear)"
       }
     ]
   },

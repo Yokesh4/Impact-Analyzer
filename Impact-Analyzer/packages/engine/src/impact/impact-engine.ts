@@ -1,6 +1,6 @@
 import { WorkspaceIndexer } from '../indexer/workspace-indexer.js';
 import { DependencyGraph } from '../graph/dependency-graph.js';
-import { WorkspaceSymbol, ImpactReport, ImpactNode, RiskLevel, SymbolType } from '../types.js';
+import { WorkspaceSymbol, ImpactReport, ImpactNode, RiskLevel, SymbolType, ImpactGroupedCounts, HierarchyEntry } from '../types.js';
 import { RiskEngine } from '../risk/risk-engine.js';
 import * as path from 'path';
 
@@ -33,6 +33,62 @@ export class ImpactEngine {
     return bestSymbol;
   }
 
+  /**
+   * Find all CSS symbols at a given line, including parent hierarchy context.
+   * Used for hover UI to show the complete nesting chain.
+   */
+  public findAllSymbolsAtLine(filePath: string, line: number): WorkspaceSymbol[] {
+    const absPath = path.resolve(filePath);
+    const fileIndex = this.indexer.files[absPath];
+    if (!fileIndex) return [];
+
+    return fileIndex.symbols.filter(sym => 
+      line >= sym.location.startLine && line <= sym.location.endLine
+    );
+  }
+
+  /**
+   * Compute grouped counts by node type for a set of affected nodes.
+   */
+  private computeGroupedCounts(affectedNodes: ImpactNode[]): ImpactGroupedCounts {
+    const counts: ImpactGroupedCounts = {
+      pages: 0,
+      components: 0,
+      modules: 0,
+      routes: 0,
+      selectors: 0
+    };
+
+    for (const node of affectedNodes) {
+      switch (node.type) {
+        case 'html-page':
+        case 'jsp-page':
+          counts.pages++;
+          break;
+        case 'component':
+          counts.components++;
+          break;
+        case 'module':
+          counts.modules++;
+          break;
+        case 'route':
+          counts.routes++;
+          break;
+        case 'css-selector':
+        case 'scss-variable':
+        case 'scss-mixin':
+          counts.selectors++;
+          break;
+      }
+    }
+    return counts;
+  }
+
+  /**
+   * Analyze impact using hierarchical CSS propagation.
+   * For CSS selectors, this aggregates downstream across the entire nesting chain
+   * (parent → child → grandchild) for accurate affected page counts.
+   */
   public analyzeImpact(symbolId: string): ImpactReport {
     const triggerNode = this.graph.nodes.get(symbolId);
     let triggerSymbol: WorkspaceSymbol | null = null;
@@ -65,13 +121,22 @@ export class ImpactEngine {
       };
     }
 
-    const downstreamIds = this.graph.getDownstream(symbolId);
+    // Use hierarchical downstream for CSS selectors, standard downstream for others
+    const isCSS = symbolId.startsWith('css:');
+    const downstreamIds = isCSS
+      ? this.graph.getHierarchicalDownstream(symbolId)
+      : this.graph.getDownstream(symbolId);
+
     const affectedNodes: ImpactNode[] = [];
     let maxRiskScore = 0;
     const riskMap: Record<RiskLevel, number> = { low: 1, medium: 2, high: 3, critical: 4 };
     const scoreToRisk: Record<number, RiskLevel> = { 1: 'low', 2: 'medium', 3: 'high', 4: 'critical' };
+    const seenIds = new Set<string>();
 
     for (const id of downstreamIds) {
+      if (seenIds.has(id)) continue;
+      seenIds.add(id);
+
       const node = this.graph.nodes.get(id);
       if (node) {
         const pathFromTrigger = this.graph.getDownstreamPath(symbolId, id);
@@ -92,11 +157,20 @@ export class ImpactEngine {
     }
 
     const overallRisk = scoreToRisk[maxRiskScore] || 'low';
+    const groupedCounts = this.computeGroupedCounts(affectedNodes);
+
+    // Build hierarchy chain for hover display (only for CSS)
+    let hierarchyChain: HierarchyEntry[] | undefined;
+    if (isCSS) {
+      hierarchyChain = this.graph.getHierarchyChain(symbolId);
+    }
 
     return {
       triggerSymbol,
       affectedNodes,
-      overallRisk
+      overallRisk,
+      groupedCounts,
+      hierarchyChain
     };
   }
 
