@@ -357,6 +357,51 @@ export class DependencyGraph {
       }
     }
 
+    // Connect compound selectors directly to page nodes if all classes in the compound are used by the page
+    const pageToClassesMap = new Map<string, Set<string>>();
+    for (const [filePath, fileIndex] of Object.entries(indexer.files)) {
+      const ext = path.extname(filePath).toLowerCase();
+      if (ext === '.html' || ext === '.jsp') {
+        const relPath = path.relative(indexer.workspaceRoot, filePath).replace(/\\/g, '/');
+        const pageId = `page:${relPath}`;
+        
+        const classes = new Set<string>();
+        for (const ref of fileIndex.references) {
+          if (ref.targetSymbolId.startsWith('css:.')) {
+            classes.add(ref.targetSymbolId.replace('css:', ''));
+          }
+        }
+        pageToClassesMap.set(pageId, classes);
+      }
+    }
+
+    const compoundSelectorNodes = Array.from(this.nodes.entries()).filter(
+      ([id, node]) => id.startsWith('css:') && node.type === 'css-selector' && id.includes(' ')
+    );
+
+    for (const [pageId, referencedClasses] of pageToClassesMap.entries()) {
+      for (const [compoundId, node] of compoundSelectorNodes) {
+        const selectorText = compoundId.replace('css:', '');
+        const classExtract = /\.([a-zA-Z0-9_-]+)/g;
+        let match: RegExpExecArray | null;
+        let allMatched = true;
+        let classCount = 0;
+        
+        while ((match = classExtract.exec(selectorText)) !== null) {
+          classCount++;
+          const className = `.${match[1]}`;
+          if (!referencedClasses.has(className)) {
+            allMatched = false;
+            break;
+          }
+        }
+        
+        if (allMatched && classCount > 0) {
+          this.addEdge(compoundId, pageId);
+        }
+      }
+    }
+
     // Build CSS hierarchy edges for accurate parent→child→grandchild propagation
     this.buildCSSHierarchyEdges();
   }

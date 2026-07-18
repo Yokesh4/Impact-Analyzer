@@ -39,23 +39,62 @@ export class ImportResolver {
     const resolvedPath = this.resolveFilePath(normalized);
     if (!resolvedPath) return;
 
-    this.visited.add(resolvedPath);
+    const normalizedResolved = this.normalizePath(resolvedPath);
+    this.visited.add(normalizedResolved);
 
     let content: string;
     try {
-      content = fs.readFileSync(resolvedPath, 'utf-8');
+      content = fs.readFileSync(normalizedResolved, 'utf-8');
     } catch {
       return; // File can't be read, skip
     }
 
     const imports = this.extractImports(content);
-    const dir = path.dirname(resolvedPath);
+    const dir = path.dirname(normalizedResolved);
 
     for (const importPath of imports) {
-      const absImportPath = path.isAbsolute(importPath)
-        ? importPath
-        : path.resolve(dir, importPath);
-      this.resolveRecursive(absImportPath);
+      let resolvedImport: string | null = null;
+
+      if (path.isAbsolute(importPath)) {
+        resolvedImport = this.resolveFilePath(importPath);
+      } else {
+        // 1. Walk up the directory structure from `dir` to `this.workspaceRoot`
+        let currentDir = dir;
+        while (true) {
+          const candidate = path.resolve(currentDir, importPath);
+          resolvedImport = this.resolveFilePath(candidate);
+          if (resolvedImport) break;
+
+          // Stop if we've reached the workspace root or can't go up further
+          if (currentDir === this.workspaceRoot || currentDir === path.dirname(currentDir)) {
+            break;
+          }
+          currentDir = path.dirname(currentDir);
+        }
+
+        // 2. Try looking in node_modules relative to the workspace root or package root
+        if (!resolvedImport) {
+          const candidate = path.resolve(this.workspaceRoot, 'node_modules', importPath);
+          resolvedImport = this.resolveFilePath(candidate);
+        }
+
+        // 3. Fallback to workspace root directly
+        if (!resolvedImport) {
+          const candidate = path.resolve(this.workspaceRoot, importPath);
+          resolvedImport = this.resolveFilePath(candidate);
+        }
+
+        // 4. Fallback to packages/sample-app/src
+        if (!resolvedImport) {
+          const sampleAppSrc = path.resolve(this.workspaceRoot, 'packages/sample-app/src');
+          const candidate = path.resolve(sampleAppSrc, importPath);
+          resolvedImport = this.resolveFilePath(candidate);
+        }
+      }
+
+      if (resolvedImport) {
+        this.resolveRecursive(resolvedImport);
+      }
     }
   }
 

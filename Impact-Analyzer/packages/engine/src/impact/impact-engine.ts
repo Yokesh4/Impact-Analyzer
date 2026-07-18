@@ -90,13 +90,26 @@ export class ImpactEngine {
    * (parent → child → grandchild) for accurate affected page counts.
    */
   public analyzeImpact(symbolId: string): ImpactReport {
-    const triggerNode = this.graph.nodes.get(symbolId);
+    let triggerNode = this.graph.nodes.get(symbolId);
     let triggerSymbol: WorkspaceSymbol | null = null;
 
     if (triggerNode) {
       const fileIndex = this.indexer.files[triggerNode.filePath];
       if (fileIndex) {
         triggerSymbol = fileIndex.symbols.find(s => s.id === symbolId) || null;
+      }
+    }
+
+    // Resolve bare class to compound selector if available (parent + child grouping)
+    if (triggerSymbol && triggerSymbol.metadata?.compoundSelector) {
+      const compoundId = `css:${triggerSymbol.metadata.compoundSelector}`;
+      if (this.graph.nodes.has(compoundId)) {
+        symbolId = compoundId;
+        triggerNode = this.graph.nodes.get(compoundId);
+        const resolvedTriggerSymbol = triggerNode ? this.indexer.files[triggerNode.filePath]?.symbols.find(s => s.id === compoundId) : null;
+        if (resolvedTriggerSymbol) {
+          triggerSymbol = resolvedTriggerSymbol;
+        }
       }
     }
 
