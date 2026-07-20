@@ -192,5 +192,63 @@ export class ImpactEngine {
     if (!symbol) return null;
     return this.analyzeImpact(symbol.id);
   }
+
+  /**
+   * Analyze aggregated impact for an entire file by combining the impact of all its symbols.
+   */
+  public analyzeFileImpact(filePath: string): ImpactReport {
+    const absPath = path.resolve(filePath);
+    const fileIndex = this.indexer.files[absPath];
+
+    const fallbackSymbol: WorkspaceSymbol = {
+      id: `file:${path.basename(filePath)}`,
+      name: path.basename(filePath),
+      type: 'css-selector',
+      location: { filePath: absPath, startLine: 1, startCol: 1, endLine: 1, endCol: 1 }
+    };
+
+    if (!fileIndex || fileIndex.symbols.length === 0) {
+      return {
+        triggerSymbol: fallbackSymbol,
+        affectedNodes: [],
+        overallRisk: 'low',
+        groupedCounts: { pages: 0, components: 0, modules: 0, routes: 0, selectors: 0 }
+      };
+    }
+
+    const triggerSymbol: WorkspaceSymbol = {
+      id: `file:${path.basename(filePath)}`,
+      name: path.basename(filePath),
+      type: 'css-selector',
+      location: { filePath: absPath, startLine: 1, startCol: 1, endLine: 1, endCol: 1 }
+    };
+
+    const combinedAffectedNodes: ImpactNode[] = [];
+    const seenIds = new Set<string>();
+    let maxRiskScore = 0;
+    const riskMap: Record<RiskLevel, number> = { low: 1, medium: 2, high: 3, critical: 4 };
+    const scoreToRisk: Record<number, RiskLevel> = { 1: 'low', 2: 'medium', 3: 'high', 4: 'critical' };
+
+    for (const sym of fileIndex.symbols) {
+      const report = this.analyzeImpact(sym.id);
+      for (const node of report.affectedNodes) {
+        if (!seenIds.has(node.symbolId)) {
+          seenIds.add(node.symbolId);
+          combinedAffectedNodes.push(node);
+          maxRiskScore = Math.max(maxRiskScore, riskMap[node.risk]);
+        }
+      }
+    }
+
+    const overallRisk = scoreToRisk[maxRiskScore] || 'low';
+    const groupedCounts = this.computeGroupedCounts(combinedAffectedNodes);
+
+    return {
+      triggerSymbol,
+      affectedNodes: combinedAffectedNodes,
+      overallRisk,
+      groupedCounts
+    };
+  }
 }
 export default ImpactEngine;

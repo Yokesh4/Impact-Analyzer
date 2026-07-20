@@ -73,42 +73,34 @@ export class DependencyGraph {
       allDownstream.add(id);
     }
 
-    // If this is a CSS class, also get downstream of all compound selectors containing it
-    // AND all bare class names that appear in those compound selectors
+    // If this is a CSS class, get downstream of compound selectors containing it
+    // and direct downstream of immediate nested child classes (without cascading into unrelated workspace classes)
     if (nodeId.startsWith('css:')) {
       const visited = new Set<string>();
       visited.add(nodeId);
-      const queue = [nodeId];
 
-      while (queue.length > 0) {
-        const current = queue.shift()!;
+      const compoundSelectors = this.classToCompoundSelectors.get(nodeId);
+      if (compoundSelectors) {
+        for (const compoundId of compoundSelectors) {
+          if (!visited.has(compoundId)) {
+            visited.add(compoundId);
+            const compoundDownstream = this.getDownstream(compoundId);
+            for (const id of compoundDownstream) {
+              allDownstream.add(id);
+            }
 
-        // Get compound selectors containing this class
-        const compoundSelectors = this.classToCompoundSelectors.get(current);
-        if (compoundSelectors) {
-          for (const compoundId of compoundSelectors) {
-            if (!visited.has(compoundId)) {
-              visited.add(compoundId);
-              // Get downstream of compound selector
-              const compoundDownstream = this.getDownstream(compoundId);
-              for (const id of compoundDownstream) {
-                allDownstream.add(id);
-              }
-
-              // Extract bare class names from the compound selector and process them too
-              const selectorText = compoundId.replace('css:', '');
-              const classRegex = /\.([a-zA-Z0-9_-]+)/g;
-              let match: RegExpExecArray | null;
-              while ((match = classRegex.exec(selectorText)) !== null) {
-                const bareClassId = `css:.${match[1]}`;
-                if (!visited.has(bareClassId)) {
-                  visited.add(bareClassId);
-                  queue.push(bareClassId);
-                  // Also get direct downstream of this bare class (connects to pages)
-                  const bareDownstream = this.getDownstream(bareClassId);
-                  for (const id of bareDownstream) {
-                    allDownstream.add(id);
-                  }
+            // Extract bare child classes within this specific compound selector
+            const selectorText = compoundId.replace('css:', '');
+            const classRegex = /\.([a-zA-Z0-9_-]+)/g;
+            let match: RegExpExecArray | null;
+            while ((match = classRegex.exec(selectorText)) !== null) {
+              const bareClassId = `css:.${match[1]}`;
+              if (!visited.has(bareClassId)) {
+                visited.add(bareClassId);
+                // Add direct downstream of child class (pages/components referencing it)
+                const bareDownstream = this.getDownstream(bareClassId);
+                for (const id of bareDownstream) {
+                  allDownstream.add(id);
                 }
               }
             }
@@ -288,6 +280,12 @@ export class DependencyGraph {
           filePath: filePath
         });
 
+        // Link template page node to component node if part of an Angular component
+        const compId = fileToComponentMap.get(filePath);
+        if (compId) {
+          this.addEdge(ownerId, compId);
+        }
+
       } else {
         const majorSymbol = fileIndex.symbols.find(s => s.type === 'component' || s.type === 'service' || s.type === 'module' || s.type === 'route');
         if (majorSymbol) {
@@ -330,7 +328,7 @@ export class DependencyGraph {
             id: ref.targetSymbolId,
             name: name,
             type: type,
-            filePath: ''
+            filePath: ref.location?.filePath || ''
           });
         }
 
@@ -355,9 +353,24 @@ export class DependencyGraph {
           }
         }
       }
+
+      // Connect components to routes
+      for (const sym of fileIndex.symbols) {
+        if (sym.type === 'route') {
+          // If route metadata specifies component name or selector
+          if (sym.metadata?.componentName) {
+            const compNode = Array.from(this.nodes.values()).find(
+              n => n.name === sym.metadata?.componentName && n.type === 'component'
+            );
+            if (compNode) {
+              this.addEdge(compNode.id, sym.id);
+            }
+          }
+        }
+      }
     }
 
-    // Connect compound selectors directly to page nodes if all classes in the compound are used by the page
+    // Connect compound selectors directly to page nodes if any class in the compound is used by the page
     const pageToClassesMap = new Map<string, Set<string>>();
     for (const [filePath, fileIndex] of Object.entries(indexer.files)) {
       const ext = path.extname(filePath).toLowerCase();
@@ -384,20 +397,60 @@ export class DependencyGraph {
         const selectorText = compoundId.replace('css:', '');
         const classExtract = /\.([a-zA-Z0-9_-]+)/g;
         let match: RegExpExecArray | null;
-        let allMatched = true;
+        let matchedCount = 0;
         let classCount = 0;
         
         while ((match = classExtract.exec(selectorText)) !== null) {
           classCount++;
           const className = `.${match[1]}`;
-          if (!referencedClasses.has(className)) {
-            allMatched = false;
-            break;
+          if (referencedClasses.has(className)) {
+            matchedCount++;
           }
         }
         
-        if (allMatched && classCount > 0) {
+        if (matchedCount > 0 && classCount > 0) {
           this.addEdge(compoundId, pageId);
+        }
+      }
+    }
+
+    // Process @import dependencies for style files (.less, .css, .scss)
+    for (const [filePath, fileIndex] of Object.entries(indexer.files)) {
+      const ext = path.extname(filePath).toLowerCase();
+      if ((ext === '.less' || ext === '.css' || ext === '.scss') && fileIndex.imports) {
+        const dir = path.dirname(filePath);
+        for (const imp of fileIndex.imports) {
+          // Attempt to locate the imported file in indexer
+          let resolvedImportPath: string | null = null;
+          const candidateAbs = path.resolve(dir, imp);
+          const exts = ['', '.less', '.css', '.scss'];
+          for (const e of exts) {
+            const p = candidateAbs + e;
+            if (indexer.files[p]) {
+              resolvedImportPath = p;
+              break;
+            }
+          }
+          if (!resolvedImportPath) {
+            // Search by filename in indexer.files
+            const baseImp = path.basename(imp, path.extname(imp));
+            for (const indexedPath of Object.keys(indexer.files)) {
+              if (path.basename(indexedPath, path.extname(indexedPath)) === baseImp) {
+                resolvedImportPath = indexedPath;
+                break;
+              }
+            }
+          }
+
+          if (resolvedImportPath && indexer.files[resolvedImportPath]) {
+            const importedIndex = indexer.files[resolvedImportPath];
+            // Connect all symbols from the imported file to symbols in the importing file
+            for (const importedSym of importedIndex.symbols) {
+              for (const importerSym of fileIndex.symbols) {
+                this.addEdge(importedSym.id, importerSym.id);
+              }
+            }
+          }
         }
       }
     }

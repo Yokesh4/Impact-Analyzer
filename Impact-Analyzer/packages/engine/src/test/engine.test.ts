@@ -731,5 +731,57 @@ describe('Impact Guard Core Engine Tests', () => {
       expect(affectedPageIds).toContain(`page:${relPage2}`);
       expect(report.groupedCounts!.pages).toBe(2);
     });
+
+    it('should propagate impact through LESS @import chains to affected JSP and HTML pages', () => {
+      const workspaceRoot = path.resolve(__dirname);
+      const indexer = new WorkspaceIndexer(workspaceRoot);
+      const graph = new DependencyGraph();
+
+      const mainLess = path.join(workspaceRoot, 'styles.less');
+      const notificationLess = path.join(workspaceRoot, 'notification.less');
+      const viewJsp = path.join(workspaceRoot, 'alert-view.jsp');
+
+      indexer.files[notificationLess] = {
+        filePath: notificationLess,
+        lastModified: 100,
+        symbols: [
+          { id: 'css:.errorText', name: '.errorText', type: 'css-selector', location: { filePath: notificationLess, startLine: 1, startCol: 1, endLine: 5, endCol: 1 } },
+          { id: 'css:.errorMessage', name: '.errorMessage', type: 'css-selector', location: { filePath: notificationLess, startLine: 6, startCol: 1, endLine: 10, endCol: 1 } }
+        ],
+        references: []
+      };
+
+      indexer.files[mainLess] = {
+        filePath: mainLess,
+        lastModified: 100,
+        symbols: [
+          { id: 'css:.ctf_7_x_styles', name: '.ctf_7_x_styles', type: 'css-selector', location: { filePath: mainLess, startLine: 1, startCol: 1, endLine: 50, endCol: 1 } }
+        ],
+        references: [],
+        imports: ['notification.less']
+      };
+
+      indexer.files[viewJsp] = {
+        filePath: viewJsp,
+        lastModified: 100,
+        symbols: [],
+        references: [
+          { targetSymbolId: 'css:.errorText', location: { filePath: viewJsp, startLine: 2, startCol: 1, endLine: 2, endCol: 20 } }
+        ]
+      };
+
+      graph.buildGraph(indexer);
+      const impactEngine = new ImpactEngine(indexer, graph);
+
+      // Analyzing symbol in imported notification.less should reach alert-view.jsp
+      const report = impactEngine.analyzeImpact('css:.errorText');
+      const relViewJsp = path.relative(workspaceRoot, viewJsp).replace(/\\/g, '/');
+
+      expect(report.affectedNodes.some(n => n.symbolId === `page:${relViewJsp}`)).toBe(true);
+
+      // Whole-file analysis on notification.less should report aggregated JSP pages
+      const fileReport = impactEngine.analyzeFileImpact(notificationLess);
+      expect(fileReport.groupedCounts!.pages).toBeGreaterThanOrEqual(1);
+    });
   });
 });

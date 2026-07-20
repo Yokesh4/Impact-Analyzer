@@ -453,14 +453,9 @@ function runImpactAnalysis(symbolId: string) {
 }
 
 function runFileAnalysis(filePath: string) {
-  const absPath = path.resolve(filePath);
-  const fileIndex = indexer.files[absPath];
-  if (!fileIndex || fileIndex.symbols.length === 0) {
-    vscode.window.showInformationMessage('No symbols tracked in this file.');
-    return;
-  }
-  const sym = fileIndex.symbols[0];
-  runImpactAnalysis(sym.id);
+  const report = impactEngine.analyzeFileImpact(filePath);
+  treeDataProvider.setReport(report);
+  updateDiagnostics(report);
 }
 
 function runWorkspaceAnalysis() {
@@ -646,13 +641,20 @@ class ImpactTreeProvider implements vscode.TreeDataProvider<TreeItemNode> {
         )
       ];
 
-      // Add category groups with counts (excluding non-existent files)
-      const htmlPages = this.report.affectedNodes.filter(n => n.type === 'html-page' && n.filePath && fs.existsSync(n.filePath));
-      const jspPages = this.report.affectedNodes.filter(n => n.type === 'jsp-page' && n.filePath && fs.existsSync(n.filePath));
-      const components = this.report.affectedNodes.filter(n => n.type === 'component' && n.filePath && fs.existsSync(n.filePath));
-      const modules = this.report.affectedNodes.filter(n => n.type === 'module' && n.filePath && fs.existsSync(n.filePath));
-      const routes = this.report.affectedNodes.filter(n => n.type === 'route' && n.filePath && fs.existsSync(n.filePath));
-      const selectors = this.report.affectedNodes.filter(n => (n.type === 'css-selector' || n.type === 'scss-variable' || n.type === 'scss-mixin') && n.filePath && fs.existsSync(n.filePath));
+      // Helper to validate file node exists or can be resolved
+      const isValidNode = (n: import('@impact-guard/engine').ImpactNode) => {
+        if (!n.filePath) return true; // keep node even if path is not specified
+        if (fs.existsSync(n.filePath)) return true;
+        const abs = path.resolve(indexer.workspaceRoot, n.filePath);
+        return fs.existsSync(abs);
+      };
+
+      const htmlPages = this.report.affectedNodes.filter(n => n.type === 'html-page' && isValidNode(n));
+      const jspPages = this.report.affectedNodes.filter(n => n.type === 'jsp-page' && isValidNode(n));
+      const components = this.report.affectedNodes.filter(n => n.type === 'component' && isValidNode(n));
+      const modules = this.report.affectedNodes.filter(n => n.type === 'module' && isValidNode(n));
+      const routes = this.report.affectedNodes.filter(n => n.type === 'route' && isValidNode(n));
+      const selectors = this.report.affectedNodes.filter(n => (n.type === 'css-selector' || n.type === 'scss-variable' || n.type === 'scss-mixin') && isValidNode(n));
 
       if (htmlPages.length > 0) {
         rootItems.push(new TreeItemNode(
@@ -719,39 +721,46 @@ class ImpactTreeProvider implements vscode.TreeDataProvider<TreeItemNode> {
     // Children for each category
     const label = element.label;
 
+    const isValidNode = (n: import('@impact-guard/engine').ImpactNode) => {
+      if (!n.filePath) return true;
+      if (fs.existsSync(n.filePath)) return true;
+      const abs = path.resolve(indexer.workspaceRoot, n.filePath);
+      return fs.existsSync(abs);
+    };
+
     if (label.startsWith('Affected HTML Pages')) {
       return Promise.resolve(this.buildNodeItems(
-        this.report.affectedNodes.filter(n => n.type === 'html-page' && n.filePath && fs.existsSync(n.filePath)),
+        this.report.affectedNodes.filter(n => n.type === 'html-page' && isValidNode(n)),
         new vscode.ThemeIcon('globe')
       ));
     }
     if (label.startsWith('Affected JSP Pages')) {
       return Promise.resolve(this.buildNodeItems(
-        this.report.affectedNodes.filter(n => n.type === 'jsp-page' && n.filePath && fs.existsSync(n.filePath)),
+        this.report.affectedNodes.filter(n => n.type === 'jsp-page' && isValidNode(n)),
         new vscode.ThemeIcon('file-code')
       ));
     }
     if (label.startsWith('Affected Components')) {
       return Promise.resolve(this.buildNodeItems(
-        this.report.affectedNodes.filter(n => n.type === 'component' && n.filePath && fs.existsSync(n.filePath)),
+        this.report.affectedNodes.filter(n => n.type === 'component' && isValidNode(n)),
         new vscode.ThemeIcon('symbol-class')
       ));
     }
     if (label.startsWith('Affected Modules')) {
       return Promise.resolve(this.buildNodeItems(
-        this.report.affectedNodes.filter(n => n.type === 'module' && n.filePath && fs.existsSync(n.filePath)),
+        this.report.affectedNodes.filter(n => n.type === 'module' && isValidNode(n)),
         new vscode.ThemeIcon('package')
       ));
     }
     if (label.startsWith('Affected Routes')) {
       return Promise.resolve(this.buildNodeItems(
-        this.report.affectedNodes.filter(n => n.type === 'route' && n.filePath && fs.existsSync(n.filePath)),
+        this.report.affectedNodes.filter(n => n.type === 'route' && isValidNode(n)),
         new vscode.ThemeIcon('symbol-interface')
       ));
     }
     if (label.startsWith('Affected Selectors')) {
       return Promise.resolve(this.buildNodeItems(
-        this.report.affectedNodes.filter(n => (n.type === 'css-selector' || n.type === 'scss-variable' || n.type === 'scss-mixin') && n.filePath && fs.existsSync(n.filePath)),
+        this.report.affectedNodes.filter(n => (n.type === 'css-selector' || n.type === 'scss-variable' || n.type === 'scss-mixin') && isValidNode(n)),
         new vscode.ThemeIcon('symbol-color')
       ));
     }
@@ -777,12 +786,13 @@ class ImpactTreeProvider implements vscode.TreeDataProvider<TreeItemNode> {
       const relPath = n.filePath ? path.relative(indexer.workspaceRoot, n.filePath).replace(/\\/g, '/') : '';
       const displayDescription = relPath ? path.dirname(relPath) : '';
       
-      const tooltipText = `File: ${relPath}\nRisk: ${n.risk.toUpperCase()}\nPath: ${n.pathFromTrigger.join(' -> ')}`;
-      
-      // Determine location for highlight command
+      const pathTrail = n.pathFromTrigger && n.pathFromTrigger.length > 1 
+        ? `\nDependency Chain: ${n.pathFromTrigger.join(' ➔ ')}` 
+        : '';
+      const tooltipText = `Target Name: ${n.name}\nType: ${n.type.toUpperCase()}\nFile: ${relPath || 'Workspace Symbol'}\nRisk Level: ${n.risk.toUpperCase()}${pathTrail}\nDeveloper Explanation: Updating the trigger element directly affects ${n.name} via structural component/selector hierarchy.`;
+
       let highlightCmd: vscode.Command | undefined;
       if (n.filePath) {
-        // Try to find the symbol location in the indexer
         const fileIndex = indexer.files[n.filePath];
         if (fileIndex) {
           const sym = fileIndex.symbols.find(s => s.id === n.symbolId || s.name === n.name);
@@ -819,18 +829,17 @@ class ImpactTreeProvider implements vscode.TreeDataProvider<TreeItemNode> {
 
 class ImpactCodeLensProvider implements vscode.CodeLensProvider {
   provideCodeLenses(document: vscode.TextDocument, token: vscode.CancellationToken): vscode.ProviderResult<vscode.CodeLens[]> {
-    if (!indexer) return [];
+    if (!indexer || !impactEngine) return [];
     
     const absPath = path.resolve(document.fileName);
     const fileIndex = indexer.files[absPath];
     if (!fileIndex) return [];
 
     const lenses: vscode.CodeLens[] = [];
-    const processedLines = new Set<number>(); // Avoid duplicate CodeLens on same line
+    const processedLines = new Set<number>();
 
     for (const sym of fileIndex.symbols) {
       if (['component', 'service', 'module', 'css-selector', 'input', 'output'].includes(sym.type)) {
-        // Skip duplicate lenses on same line
         if (processedLines.has(sym.location.startLine)) continue;
         processedLines.add(sym.location.startLine);
 
@@ -838,42 +847,24 @@ class ImpactCodeLensProvider implements vscode.CodeLensProvider {
         const end = new vscode.Position(sym.location.endLine - 1, sym.location.endCol - 1);
         const range = new vscode.Range(start, end);
         
-        // Use hierarchical downstream for CSS selectors
-        const isCSS = sym.id.startsWith('css:');
-        const downstream = isCSS
-          ? graph.getHierarchicalDownstream(sym.id)
-          : graph.getDownstream(sym.id);
-        
-        const downCount = downstream.length;
-        const risk = RiskEngine.calculateRisk(downCount, sym.type);
-
-        // Compute grouped counts for professional display
-        let pageCount = 0;
-        let componentCount = 0;
-        let otherCount = 0;
-        for (const id of downstream) {
-          const node = graph.nodes.get(id);
-          if (node) {
-            if (node.type === 'html-page' || node.type === 'jsp-page') pageCount++;
-            else if (node.type === 'component') componentCount++;
-            else otherCount++;
-          }
+        const report = impactEngine.analyzeImpact(sym.id);
+        const c = report.groupedCounts;
+        const countParts: string[] = [];
+        if (c) {
+          if (c.pages > 0) countParts.push(`${c.pages} page${c.pages > 1 ? 's' : ''}`);
+          if (c.components > 0) countParts.push(`${c.components} component${c.components > 1 ? 's' : ''}`);
+          if (c.routes > 0) countParts.push(`${c.routes} route${c.routes > 1 ? 's' : ''}`);
+          if (c.modules > 0) countParts.push(`${c.modules} module${c.modules > 1 ? 's' : ''}`);
+          if (c.selectors > 0) countParts.push(`${c.selectors} selector${c.selectors > 1 ? 's' : ''}`);
         }
 
-        // Build professional label with ThemeIcon-style prefix
         let riskIndicator = '$(pass)';
-        if (risk === 'critical') riskIndicator = '$(error)';
-        else if (risk === 'high') riskIndicator = '$(warning)';
-        else if (risk === 'medium') riskIndicator = '$(info)';
+        if (report.overallRisk === 'critical') riskIndicator = '$(error)';
+        else if (report.overallRisk === 'high') riskIndicator = '$(warning)';
+        else if (report.overallRisk === 'medium') riskIndicator = '$(info)';
 
-        // Build count parts
-        const countParts: string[] = [];
-        if (pageCount > 0) countParts.push(`${pageCount} page${pageCount > 1 ? 's' : ''}`);
-        if (componentCount > 0) countParts.push(`${componentCount} component${componentCount > 1 ? 's' : ''}`);
-        if (otherCount > 0) countParts.push(`${otherCount} other${otherCount > 1 ? 's' : ''}`);
-        
         const countStr = countParts.length > 0 ? countParts.join(' · ') : 'No impact';
-        const title = `$(shield) Impact: ${countStr}  ${riskIndicator} ${getRiskLabel(risk)}`;
+        const title = `$(shield) Impact: ${countStr}  ${riskIndicator} ${getRiskLabel(report.overallRisk)}`;
 
         const lens = new vscode.CodeLens(range, {
           title,
@@ -897,63 +888,38 @@ class ImpactHoverProvider implements vscode.HoverProvider {
     const symbol = impactEngine.findSymbolAtLine(document.fileName, line);
     if (!symbol) return null;
 
-    // Get all symbols on this line for hierarchy context
-    const allSymbolsAtLine = impactEngine.findAllSymbolsAtLine(document.fileName, line);
-
-    // Compute impact using hierarchical analysis
     const isCSS = symbol.id.startsWith('css:');
-    const downstream = isCSS
-      ? graph.getHierarchicalDownstream(symbol.id)
-      : graph.getDownstream(symbol.id);
-    const downCount = downstream.length;
-    const risk = RiskEngine.calculateRisk(downCount, symbol.type);
     const report = impactEngine.analyzeImpact(symbol.id);
+    const downCount = report.affectedNodes.length;
+    const risk = report.overallRisk;
 
     const markdown = new vscode.MarkdownString();
     markdown.isTrusted = true;
     markdown.supportThemeIcons = true;
     
-    // ─── Header ───
     markdown.appendMarkdown(`### $(shield) Impact Guard — Analysis\n\n`);
-    
-    // ─── Trigger Info ───
     markdown.appendMarkdown(`$(symbol-property) **Trigger:** \`${symbol.name}\` _(${symbol.type})_\n\n`);
 
-    // ─── Hierarchy Chain (for CSS selectors) ───
     if (isCSS && report.hierarchyChain && report.hierarchyChain.length > 0) {
       markdown.appendMarkdown(`---\n\n`);
       markdown.appendMarkdown(`$(list-tree) **Selector Hierarchy:**\n\n`);
-      
-      // Show current selector as root
       markdown.appendMarkdown(`\`${symbol.name}\`\n\n`);
-      
       for (const entry of report.hierarchyChain) {
         const indent = '&nbsp;&nbsp;'.repeat(entry.depth);
         markdown.appendMarkdown(`${indent}$(arrow-right) \`${entry.selector}\` _(${entry.affectedCount} affected)_\n\n`);
       }
     }
 
-    // ─── Grouped Impact Counts ───
     markdown.appendMarkdown(`---\n\n`);
     markdown.appendMarkdown(`$(graph) **Impact Summary:**\n\n`);
 
     if (report.groupedCounts) {
       const c = report.groupedCounts;
-      if (c.pages > 0) {
-        markdown.appendMarkdown(`$(globe) **Pages:** ${c.pages}\n\n`);
-      }
-      if (c.components > 0) {
-        markdown.appendMarkdown(`$(symbol-class) **Components:** ${c.components}\n\n`);
-      }
-      if (c.modules > 0) {
-        markdown.appendMarkdown(`$(package) **Modules:** ${c.modules}\n\n`);
-      }
-      if (c.routes > 0) {
-        markdown.appendMarkdown(`$(symbol-interface) **Routes:** ${c.routes}\n\n`);
-      }
-      if (c.selectors > 0) {
-        markdown.appendMarkdown(`$(symbol-color) **Selectors:** ${c.selectors}\n\n`);
-      }
+      if (c.pages > 0) markdown.appendMarkdown(`$(globe) **Pages:** ${c.pages}\n\n`);
+      if (c.components > 0) markdown.appendMarkdown(`$(symbol-class) **Components:** ${c.components}\n\n`);
+      if (c.modules > 0) markdown.appendMarkdown(`$(package) **Modules:** ${c.modules}\n\n`);
+      if (c.routes > 0) markdown.appendMarkdown(`$(symbol-interface) **Routes:** ${c.routes}\n\n`);
+      if (c.selectors > 0) markdown.appendMarkdown(`$(symbol-color) **Selectors:** ${c.selectors}\n\n`);
       if (c.pages === 0 && c.components === 0 && c.modules === 0 && c.routes === 0 && c.selectors === 0) {
         markdown.appendMarkdown(`_No downstream impacts detected._\n\n`);
       }
@@ -961,7 +927,6 @@ class ImpactHoverProvider implements vscode.HoverProvider {
       markdown.appendMarkdown(`Total affected: ${downCount}\n\n`);
     }
 
-    // ─── Risk Level ───
     let riskIcon = '$(pass)';
     if (risk === 'critical') riskIcon = '$(error)';
     else if (risk === 'high') riskIcon = '$(warning)';
@@ -970,21 +935,28 @@ class ImpactHoverProvider implements vscode.HoverProvider {
     markdown.appendMarkdown(`---\n\n`);
     markdown.appendMarkdown(`${riskIcon} **Risk Level:** **${getRiskLabel(risk)}**\n\n`);
 
-    // ─── Top Affected Items Preview ───
     if (downCount > 0) {
       const pages = report.affectedNodes.filter(n => n.type === 'html-page' || n.type === 'jsp-page');
       const components = report.affectedNodes.filter(n => n.type === 'component');
-      const previewItems = [...pages, ...components].slice(0, 4);
+      const routes = report.affectedNodes.filter(n => n.type === 'route');
+      const modules = report.affectedNodes.filter(n => n.type === 'module');
+      const selectors = report.affectedNodes.filter(n => n.type === 'css-selector' || n.type === 'scss-variable' || n.type === 'scss-mixin');
+      
+      const previewItems = [...pages, ...components, ...routes, ...modules, ...selectors].slice(0, 5);
       
       if (previewItems.length > 0) {
-        markdown.appendMarkdown(`**Top Affected:**\n\n`);
+        markdown.appendMarkdown(`**Top Affected Areas:**\n\n`);
         for (const item of previewItems) {
-          const icon = item.type === 'html-page' || item.type === 'jsp-page' ? '$(globe)' : '$(symbol-class)';
-          markdown.appendMarkdown(`${icon} \`${item.name}\`\n\n`);
+          let icon = '$(file)';
+          if (item.type === 'html-page' || item.type === 'jsp-page') icon = '$(globe)';
+          else if (item.type === 'component') icon = '$(symbol-class)';
+          else if (item.type === 'route') icon = '$(symbol-interface)';
+          else if (item.type === 'module') icon = '$(package)';
+          else if (item.type === 'css-selector') icon = '$(symbol-color)';
+          markdown.appendMarkdown(`${icon} \`${item.name}\` _(${item.type})_\n\n`);
         }
       }
 
-      // ─── Show in Sidebar Link ───
       const argsStr = encodeURIComponent(JSON.stringify([symbol.id]));
       markdown.appendMarkdown(`---\n\n`);
       markdown.appendMarkdown(`$(link-external) **[Show full impact in Sidebar...](command:impact-guard.analyzeSymbol?${argsStr})**\n`);
